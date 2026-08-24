@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient as createSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
-type View = 'overview' | 'clock' | 'attendance' | 'leave' | 'staff' | 'stores' | 'administrators';
+type View = 'overview' | 'clock' | 'attendance' | 'leave' | 'staff' | 'stores' | 'reports' | 'administrators';
 type Store = { id: string; name: string; location: string; code: string; active: boolean };
 type Person = { id: string; name: string; role: string; storeId: string; pin: string; active: boolean; clockedIn: boolean; clockIn?: string };
 type RecordItem = { id: string; employeeId: string; storeId: string; date: string; inTime: string; outTime?: string; status: 'On time' | 'Late' | 'Complete'; hours?: number };
@@ -14,6 +14,8 @@ type LeaveRequest = { id: string; staffId: string; storeId: string; type: 'annua
 type PublicHoliday = { date: string; name: string; observed: boolean };
 type HoursBreakdown = { worked: number; ordinary: number; overtime: number; publicHoliday: number };
 type AdministratorMember = { userId: string; email: string; role: 'admin' | 'manager'; active: boolean; pending: boolean; invitedAt: string; acceptedAt: string | null; storeIds: string[] };
+type ReportRun = { week_start: string; week_end: string; recipient_email: string; status: 'sending' | 'sent' | 'failed'; error_message: string | null; completed_at: string | null; created_at: string };
+type ReportSetting = { recipientEmail: string; enabled: boolean; updatedAt: string | null; deliveryConfigured: boolean };
 type SyncMode = 'demo' | 'connecting' | 'cloud' | 'error';
 
 const initialStores: Store[] = [
@@ -51,6 +53,7 @@ const nav: { id: View; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: '⌂' }, { id: 'clock', label: 'Clock station', icon: '◷' },
   { id: 'attendance', label: 'Attendance', icon: '▤' }, { id: 'leave', label: 'Leave & hours', icon: '◫' },
   { id: 'staff', label: 'Staff', icon: '♙' }, { id: 'stores', label: 'Stores', icon: '◇' },
+  { id: 'reports', label: 'Weekly reports', icon: '▥' },
   { id: 'administrators', label: 'Administrators', icon: '⚙' },
 ];
 
@@ -116,6 +119,9 @@ export default function Home() {
   const [administrators, setAdministrators] = useState<AdministratorMember[]>([]);
   const [currentAdministratorId, setCurrentAdministratorId] = useState('');
   const [administratorsLoading, setAdministratorsLoading] = useState(false);
+  const [reportSetting, setReportSetting] = useState<ReportSetting>({ recipientEmail: '', enabled: false, updatedAt: null, deliveryConfigured: false });
+  const [reportRuns, setReportRuns] = useState<ReportRun[]>([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
   const [adminEmail, setAdminEmail] = useState('Administrator');
   const [supabase] = useState<SupabaseClient | null>(() => createSupabaseClient());
 
@@ -169,7 +175,7 @@ export default function Home() {
   const administratorName = adminEmail === 'Administrator' ? 'Administrator' : adminEmail.split('@')[0];
   const hoursByRecord = useMemo(() => calculateHours(records, holidays), [records, holidays]);
 
-  function switchView(next: View) { if (next === 'administrators' && currentRole !== 'admin') return; if ((next === 'overview' || next === 'clock') && selectedStore === 'all') setSelectedStore(stores.find((store) => store.active)?.id ?? 'rosebank'); setView(next); setMenuOpen(false); if (next === 'administrators') void loadAdministrators(); }
+  function switchView(next: View) { if ((next === 'administrators' || next === 'reports') && currentRole !== 'admin') return; if ((next === 'overview' || next === 'clock') && selectedStore === 'all') setSelectedStore(stores.find((store) => store.active)?.id ?? 'rosebank'); setView(next); setMenuOpen(false); if (next === 'administrators') void loadAdministrators(); if (next === 'reports') void loadReportSettings(); }
   async function addStaff(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); const name = String(form.get('name') ?? '');
     const role = String(form.get('role')); const storeId = String(form.get('store')); const pin = String(form.get('pin'));
@@ -280,6 +286,39 @@ export default function Home() {
       setToast(payload.message); await loadAdministrators();
     } catch (error) { setToast(error instanceof Error ? error.message : 'Access could not be removed.'); }
   }
+  async function reportFetch(options: RequestInit = {}) {
+    if (!supabase) throw new Error('Cloud access is unavailable.');
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+    const response = await fetch('/api/report-settings', { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers ?? {}) } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? 'Report request failed.');
+    return payload;
+  }
+  async function loadReportSettings() {
+    if (syncMode !== 'cloud' || currentRole !== 'admin') return;
+    setReportsLoading(true);
+    try {
+      const payload = await reportFetch();
+      setReportSetting({ ...payload.setting, deliveryConfigured: payload.deliveryConfigured }); setReportRuns(payload.runs ?? []);
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Could not load report settings.'); }
+    finally { setReportsLoading(false); }
+  }
+  async function saveReportSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const payload = await reportFetch({ method: 'PUT', body: JSON.stringify({ recipientEmail: String(form.get('recipientEmail') ?? ''), enabled: form.get('enabled') === 'on' }) });
+      setToast(payload.message); await loadReportSettings();
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Report settings could not be saved.'); }
+  }
+  async function sendTestReport() {
+    setReportsLoading(true);
+    try { const payload = await reportFetch({ method: 'POST' }); setToast(payload.message); await loadReportSettings(); }
+    catch (error) { setToast(error instanceof Error ? error.message : 'Test report could not be sent.'); }
+    finally { setReportsLoading(false); }
+  }
   async function decideLeave(id: string, status: 'approved' | 'rejected') {
     if (syncMode === 'cloud' && supabase) {
       const { error } = await supabase.from('leave_requests').update({ status, decided_at: new Date().toISOString() }).eq('id', id);
@@ -298,7 +337,7 @@ export default function Home() {
       <button className={`mobile-scrim ${menuOpen ? 'show' : ''}`} aria-label="Close menu" onClick={() => setMenuOpen(false)} />
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
         <div className="brand"><span className="brand-mark">P</span><span>Presently</span><button className="close-menu" aria-label="Close menu" onClick={() => setMenuOpen(false)}>×</button></div>
-        <nav>{nav.filter((item) => currentRole === 'admin' || item.id !== 'administrators').map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => switchView(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+        <nav>{nav.filter((item) => currentRole === 'admin' || (item.id !== 'administrators' && item.id !== 'reports')).map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => switchView(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
         <div className="sidebar-bottom"><div className={`sync-status ${syncMode}`}>{syncMode === 'cloud' ? 'Cloud data connected' : syncMode === 'connecting' ? 'Connecting securely…' : syncMode === 'error' ? 'Cloud connection needs attention' : 'Local demo data'}</div><div className="support-card"><span>{syncMode === 'cloud' ? 'Phase 2 workspace' : 'Preview workspace'}</span><small>{syncMode === 'cloud' ? 'Shared securely across devices' : 'Connect Supabase for shared data'}</small></div><div className="profile"><span className="avatar plum">NM</span><span><b>{adminEmail.split('@')[0]}</b><small>Administrator</small></span><button className="signout-button" onClick={syncMode === 'cloud' ? signOut : undefined}>{syncMode === 'cloud' ? 'Sign out' : '⋮'}</button></div></div>
       </aside>
 
@@ -314,10 +353,11 @@ export default function Home() {
         {view === 'leave' && <LeaveAndHours requests={leaveRequests} people={people} stores={stores} holidays={holidays} hoursByRecord={hoursByRecord} onDecision={decideLeave} />}
         {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} canManage={currentRole === 'admin'} onAdd={() => setModal('staff')} onToggle={toggleStaff} />}
         {view === 'stores' && <Stores stores={stores} people={people} canManage={currentRole === 'admin'} onAdd={() => setModal('store')} onToggle={toggleStore} onOpen={(id) => { setSelectedStore(id); setView('overview'); }} />}
+        {view === 'reports' && currentRole === 'admin' && <WeeklyReports setting={reportSetting} runs={reportRuns} loading={reportsLoading} onSave={saveReportSettings} onSend={sendTestReport} />}
         {view === 'administrators' && currentRole === 'admin' && <Administrators members={administrators} stores={stores} currentUserId={currentAdministratorId} loading={administratorsLoading} onInvite={() => setModal('administrator')} onChange={changeAdministrator} onRemove={removeAdministrator} />}
       </section>
 
-      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.filter((item) => item.id !== 'stores' && item.id !== 'administrators').map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.id === 'leave' ? 'Leave' : item.label}</small></button>)}</nav>
+      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.filter((item) => item.id !== 'stores' && item.id !== 'administrators' && item.id !== 'reports').map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.id === 'leave' ? 'Leave' : item.label}</small></button>)}</nav>
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
       {modal === 'staff' && <Modal title="Add staff member" description="Create a staff profile and assign it to a store." onClose={() => setModal(null)}><form onSubmit={addStaff} className="modal-form"><label>Full name<input name="name" placeholder="e.g. Lerato Nkosi" required /></label><label>Role<select name="role"><option>Sales associate</option><option>Store manager</option><option>Cashier</option><option>Stock assistant</option></select></label><label>Store<select name="store">{stores.filter((store) => store.active).map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>4-digit clock PIN<input name="pin" inputMode="numeric" pattern="[0-9]{4}" maxLength={4} placeholder="0000" required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Add staff member</button></div></form></Modal>}
       {modal === 'store' && <Modal title="Add a store" description="Set up a new location before assigning staff." onClose={() => setModal(null)}><form onSubmit={addStore} className="modal-form"><label>Store name<input name="name" placeholder="e.g. Brooklyn Mall" required /></label><label>City or area<input name="location" placeholder="e.g. Pretoria" required /></label><label>Store code<input name="code" placeholder="e.g. BKL" minLength={2} maxLength={5} required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Create store</button></div></form></Modal>}
@@ -348,6 +388,10 @@ function LeaveAndHours({ requests, people, stores, holidays, hoursByRecord, onDe
   const overtime = Array.from(hoursByRecord.values()).reduce((sum, item) => sum + item.overtime, 0);
   const upcoming = holidays.filter((holiday) => holiday.date >= today).slice(0, 4);
   return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>No scheduled meal break</small></article><article className="rule-card highlight"><span>ORDINARY LIMIT</span><b>45 hours/week</b><small>Hours above this are flagged as overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Across loaded attendance records</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Hours are classified for review, not used to calculate salary. Store operating hours and individual employee rosters remain separate.</p></div>;
+}
+
+function WeeklyReports({ setting, runs, loading, onSave, onSend }: { setting: ReportSetting; runs: ReportRun[]; loading: boolean; onSave: (event: FormEvent<HTMLFormElement>) => void; onSend: () => void }) {
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">AUTOMATED HR REPORTING</p><h2>Weekly all-branch report</h2><p>Every Monday at 07:00, HR receives the previous Monday–Sunday attendance report.</p></div><button className="secondary-button" disabled={loading || !setting.recipientEmail || !setting.deliveryConfigured} onClick={onSend}>{loading ? 'Preparing…' : 'Send test report'}</button></section>{!setting.deliveryConfigured && <div className="holiday-banner report-warning"><span>!</span><div><b>Email provider setup required</b><small>Add RESEND_API_KEY and REPORT_FROM_EMAIL in Vercel before enabling delivery.</small></div></div>}<div className="report-settings-grid"><section className="panel report-config"><div className="panel-heading"><div><h3>Delivery settings</h3><p>Only administrators can change the HR recipient.</p></div></div><form onSubmit={onSave} className="modal-form" key={`${setting.recipientEmail}-${setting.enabled}`}><label>HR email address<input name="recipientEmail" type="email" defaultValue={setting.recipientEmail} placeholder="hr@yourcompany.co.za" required /></label><label className="report-toggle"><input name="enabled" type="checkbox" defaultChecked={setting.enabled} /><span><b>Send automatically every Monday</b><small>07:00 South African time · previous complete week</small></span></label><button className="primary-button" disabled={loading}>{loading ? 'Saving…' : 'Save report schedule'}</button></form><div className="report-includes"><b>Every report includes</b><span>✓ Branch-by-branch summary</span><span>✓ Worked, ordinary and overtime hours</span><span>✓ Public-holiday hours</span><span>✓ Late arrivals and missing clock-outs</span><span>✓ Absence, annual leave and sick leave</span><span>✓ Detailed CSV attachment for every employee</span></div></section><section className="panel report-history"><div className="panel-heading"><div><h3>Delivery history</h3><p>Most recent scheduled and test reports</p></div></div>{runs.length ? runs.map((run) => <article className="report-run" key={`${run.week_start}-${run.created_at}`}><span className={`leave-status ${run.status === 'sent' ? 'approved' : run.status === 'failed' ? 'rejected' : 'pending'}`}>{run.status}</span><div><b>{run.week_start} → {run.week_end}</b><small>{run.recipient_email}</small>{run.error_message && <p>{run.error_message}</p>}</div><time>{new Date(run.completed_at ?? run.created_at).toLocaleString('en-ZA', { dateStyle: 'medium', timeStyle: 'short' })}</time></article>) : <EmptyState title="No reports sent yet" note="Save the HR address, then send a test report." />}</section></div><p className="rules-note">The CSV is suitable for Excel. Overtime classifications follow the 45-hour weekly limit and exclude the configured unpaid meal break.</p></div>;
 }
 
 function Administrators({ members, stores, currentUserId, loading, onInvite, onChange, onRemove }: { members: AdministratorMember[]; stores: Store[]; currentUserId: string; loading: boolean; onInvite: () => void; onChange: (userId: string, action: 'suspend' | 'restore') => void; onRemove: (userId: string) => void }) {
