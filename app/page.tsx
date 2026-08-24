@@ -6,10 +6,13 @@ import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient as createSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
-type View = 'overview' | 'clock' | 'attendance' | 'staff' | 'stores';
+type View = 'overview' | 'clock' | 'attendance' | 'leave' | 'staff' | 'stores';
 type Store = { id: string; name: string; location: string; code: string; active: boolean };
 type Person = { id: string; name: string; role: string; storeId: string; pin: string; active: boolean; clockedIn: boolean; clockIn?: string };
 type RecordItem = { id: string; employeeId: string; storeId: string; date: string; inTime: string; outTime?: string; status: 'On time' | 'Late' | 'Complete'; hours?: number };
+type LeaveRequest = { id: string; staffId: string; storeId: string; type: 'annual' | 'sick'; startDate: string; endDate: string; reason: string; status: 'pending' | 'approved' | 'rejected'; managerNote?: string; createdAt: string };
+type PublicHoliday = { date: string; name: string; observed: boolean };
+type HoursBreakdown = { worked: number; ordinary: number; overtime: number; publicHoliday: number };
 type SyncMode = 'demo' | 'connecting' | 'cloud' | 'error';
 
 const initialStores: Store[] = [
@@ -45,12 +48,48 @@ const initialRecords: RecordItem[] = [
 
 const nav: { id: View; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: '⌂' }, { id: 'clock', label: 'Clock station', icon: '◷' },
-  { id: 'attendance', label: 'Attendance', icon: '▤' }, { id: 'staff', label: 'Staff', icon: '♙' }, { id: 'stores', label: 'Stores', icon: '◇' },
+  { id: 'attendance', label: 'Attendance', icon: '▤' }, { id: 'leave', label: 'Leave & hours', icon: '◫' },
+  { id: 'staff', label: 'Staff', icon: '♙' }, { id: 'stores', label: 'Stores', icon: '◇' },
+];
+
+const demoHolidays: PublicHoliday[] = [
+  { date: '2026-01-01', name: "New Year's Day", observed: false }, { date: '2026-03-21', name: 'Human Rights Day', observed: false },
+  { date: '2026-04-03', name: 'Good Friday', observed: false }, { date: '2026-04-06', name: 'Family Day', observed: false },
+  { date: '2026-04-27', name: 'Freedom Day', observed: false }, { date: '2026-05-01', name: "Workers' Day", observed: false },
+  { date: '2026-06-16', name: 'Youth Day', observed: false }, { date: '2026-08-09', name: "National Women's Day", observed: false },
+  { date: '2026-08-10', name: "National Women's Day observed", observed: true }, { date: '2026-09-24', name: 'Heritage Day', observed: false },
+  { date: '2026-12-16', name: 'Day of Reconciliation', observed: false }, { date: '2026-12-25', name: 'Christmas Day', observed: false },
+  { date: '2026-12-26', name: 'Day of Goodwill', observed: false },
 ];
 
 const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase();
 const tones = ['plum', 'blue', 'gold', 'green'];
 const formatDate = (value: Date) => value.toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' });
+
+function calculateHours(records: RecordItem[], holidays: PublicHoliday[]) {
+  const result = new Map<string, HoursBreakdown>();
+  const holidayDates = new Set(holidays.map((holiday) => holiday.date));
+  const weeklyOrdinary = new Map<string, number>();
+  const completed = records.filter((record) => record.hours !== undefined).slice().sort((a, b) => `${a.date}${a.inTime}`.localeCompare(`${b.date}${b.inTime}`));
+  for (const record of completed) {
+    const date = new Date(`${record.date}T12:00:00`);
+    const day = date.getDay();
+    const gross = record.hours ?? 0;
+    const worked = Math.max(0, Math.round((gross - (day >= 1 && day <= 5 && gross > 5 ? 1 : 0)) * 10) / 10);
+    if (holidayDates.has(record.date)) {
+      result.set(record.id, { worked, ordinary: 0, overtime: 0, publicHoliday: worked });
+      continue;
+    }
+    const monday = new Date(date); monday.setDate(date.getDate() - ((day + 6) % 7));
+    const weekKey = `${record.employeeId}-${monday.toLocaleDateString('en-CA')}`;
+    const used = weeklyOrdinary.get(weekKey) ?? 0;
+    const ordinary = Math.max(0, Math.min(worked, 45 - used));
+    const overtime = Math.max(0, Math.round((worked - ordinary) * 10) / 10);
+    weeklyOrdinary.set(weekKey, used + ordinary);
+    result.set(record.id, { worked, ordinary: Math.round(ordinary * 10) / 10, overtime, publicHoliday: 0 });
+  }
+  return result;
+}
 
 export default function Home() {
   const router = useRouter();
@@ -59,6 +98,8 @@ export default function Home() {
   const [stores, setStores] = useState<Store[]>(cloudConfigured ? [] : initialStores);
   const [people, setPeople] = useState<Person[]>(cloudConfigured ? [] : initialPeople);
   const [records, setRecords] = useState<RecordItem[]>(cloudConfigured ? [] : initialRecords);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [holidays, setHolidays] = useState<PublicHoliday[]>(demoHolidays);
   const [selectedStore, setSelectedStore] = useState(cloudConfigured ? '' : 'rosebank');
   const [selectedEmployee, setSelectedEmployee] = useState(cloudConfigured ? '' : 'thandi');
   const [recordDate, setRecordDate] = useState(today);
@@ -89,18 +130,22 @@ export default function Home() {
       if (!membership) { router.replace('/onboarding'); return; }
       const orgId = String(membership.organization_id); setOrganizationId(orgId);
 
-      const [storeResult, staffResult, attendanceResult] = await Promise.all([
+      const [storeResult, staffResult, attendanceResult, leaveResult, holidayResult] = await Promise.all([
         supabase.from('stores').select('*').eq('organization_id', orgId).order('name'),
         supabase.from('staff').select('id, organization_id, store_id, name, role, pin_last_two, active, created_at').eq('organization_id', orgId).order('name'),
         supabase.from('attendance').select('*').eq('organization_id', orgId).order('clock_in', { ascending: false }).limit(250),
+        supabase.from('leave_requests').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }),
+        supabase.from('public_holidays').select('*').gte('holiday_date', '2026-01-01').lte('holiday_date', '2026-12-31').order('holiday_date'),
       ]);
-      if (storeResult.error || staffResult.error || attendanceResult.error) { setSyncMode('error'); setHydrated(true); return; }
+      if (storeResult.error || staffResult.error || attendanceResult.error || leaveResult.error || holidayResult.error) { setSyncMode('error'); setHydrated(true); return; }
 
       const cloudRecords: RecordItem[] = (attendanceResult.data ?? []).map((row) => ({ id: row.id, employeeId: row.staff_id, storeId: row.store_id, date: row.work_date, inTime: new Date(row.clock_in).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', hour12: false }), outTime: row.clock_out ? new Date(row.clock_out).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', hour12: false }) : undefined, status: row.status, hours: row.clock_out ? Math.round(((new Date(row.clock_out).getTime() - new Date(row.clock_in).getTime()) / 3600000) * 10) / 10 : undefined }));
       const openShifts = new Map(cloudRecords.filter((record) => !record.outTime).map((record) => [record.employeeId, record]));
       const cloudStores: Store[] = (storeResult.data ?? []).map((row) => ({ id: row.id, name: row.name, location: row.location, code: row.code, active: row.active }));
       const cloudPeople: Person[] = (staffResult.data ?? []).map((row) => ({ id: row.id, name: row.name, role: row.role, storeId: row.store_id, pin: `00${row.pin_last_two ?? '00'}`, active: row.active, clockedIn: openShifts.has(row.id), clockIn: openShifts.get(row.id)?.inTime }));
-      setStores(cloudStores); setPeople(cloudPeople); setRecords(cloudRecords); setSelectedStore(cloudStores.find((store) => store.active)?.id ?? ''); setSyncMode('cloud'); setHydrated(true);
+      const cloudLeave: LeaveRequest[] = (leaveResult.data ?? []).map((row) => ({ id: row.id, staffId: row.staff_id, storeId: row.store_id, type: row.leave_type, startDate: row.start_date, endDate: row.end_date, reason: row.reason, status: row.status, managerNote: row.manager_note ?? undefined, createdAt: row.created_at }));
+      const cloudHolidays: PublicHoliday[] = (holidayResult.data ?? []).map((row) => ({ date: row.holiday_date, name: row.name, observed: row.observed }));
+      setStores(cloudStores); setPeople(cloudPeople); setRecords(cloudRecords); setLeaveRequests(cloudLeave); setHolidays(cloudHolidays); setSelectedStore(cloudStores.find((store) => store.active)?.id ?? ''); setSyncMode('cloud'); setHydrated(true);
     }
     hydrate();
     return () => window.clearInterval(timer);
@@ -115,6 +160,7 @@ export default function Home() {
   const effectiveSelectedEmployee = storePeople.some((person) => person.id === selectedEmployee) ? selectedEmployee : (storePeople[0]?.id ?? '');
   const activeEmployee = people.find((person) => person.id === effectiveSelectedEmployee);
   const administratorName = adminEmail === 'Administrator' ? 'Administrator' : adminEmail.split('@')[0];
+  const hoursByRecord = useMemo(() => calculateHours(records, holidays), [records, holidays]);
 
   function switchView(next: View) { if ((next === 'overview' || next === 'clock') && selectedStore === 'all') setSelectedStore(stores.find((store) => store.active)?.id ?? 'rosebank'); setView(next); setMenuOpen(false); }
   async function addStaff(event: FormEvent<HTMLFormElement>) {
@@ -182,8 +228,16 @@ export default function Home() {
     setStores((current) => current.map((item) => item.id === id ? { ...item, active } : item));
   }
   async function signOut() { await supabase?.auth.signOut(); router.replace('/login'); }
+  async function decideLeave(id: string, status: 'approved' | 'rejected') {
+    if (syncMode === 'cloud' && supabase) {
+      const { error } = await supabase.from('leave_requests').update({ status, decided_at: new Date().toISOString() }).eq('id', id);
+      if (error) { setToast(`Could not update request: ${error.message}`); return; }
+    }
+    setLeaveRequests((current) => current.map((request) => request.id === id ? { ...request, status } : request));
+    setToast(`Leave request ${status}.`);
+  }
   function exportCsv() {
-    const lines = [['Date','Employee','Store','Clock in','Clock out','Status','Hours'], ...filteredRecords.map((record) => [record.date, people.find((p) => p.id === record.employeeId)?.name ?? '', stores.find((s) => s.id === record.storeId)?.name ?? '', record.inTime, record.outTime ?? '', record.status, String(record.hours ?? '')])];
+    const lines = [['Date','Employee','Store','Clock in','Clock out','Status','Worked hours','Ordinary hours','Overtime hours','Public holiday hours'], ...filteredRecords.map((record) => { const hours = hoursByRecord.get(record.id); return [record.date, people.find((p) => p.id === record.employeeId)?.name ?? '', stores.find((s) => s.id === record.storeId)?.name ?? '', record.inTime, record.outTime ?? '', record.status, String(hours?.worked ?? ''), String(hours?.ordinary ?? ''), String(hours?.overtime ?? ''), String(hours?.publicHoliday ?? '')]; })];
     const blob = new Blob([lines.map((line) => line.join(',')).join('\n')], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `attendance-${recordDate}.csv`; anchor.click(); URL.revokeObjectURL(url); setToast('Attendance CSV downloaded.');
   }
 
@@ -204,12 +258,13 @@ export default function Home() {
           ? <section className="empty-workspace"><span className="brand-mark">P</span><p className="eyebrow">YOUR WORKSPACE IS READY</p><h2>Add your first store</h2><p>Pits Paints &amp; Toolhub is connected securely. Create a store location, then add its staff members.</p><button className="primary-button" onClick={() => { setView('stores'); setModal('store'); }}>＋ Add first store</button></section>
           : <Overview stores={stores} storePeople={storePeople} selectedStore={selectedStore} setSelectedStore={setSelectedStore} presentCount={presentCount} now={now} onOpenClock={() => setView('clock')} onViewStaff={() => setView('staff')} />)}
         {view === 'clock' && <ClockStation stores={stores} people={people} records={records} selectedStore={selectedStore} setSelectedStore={setSelectedStore} selectedEmployee={effectiveSelectedEmployee} setSelectedEmployee={setSelectedEmployee} activeEmployee={activeEmployee} now={now} onAction={clockAction} />}
-        {view === 'attendance' && <Attendance records={filteredRecords} people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} recordDate={recordDate} setRecordDate={setRecordDate} onExport={exportCsv} />}
+        {view === 'attendance' && <Attendance records={filteredRecords} people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} recordDate={recordDate} setRecordDate={setRecordDate} hoursByRecord={hoursByRecord} holidays={holidays} onExport={exportCsv} />}
+        {view === 'leave' && <LeaveAndHours requests={leaveRequests} people={people} stores={stores} holidays={holidays} hoursByRecord={hoursByRecord} onDecision={decideLeave} />}
         {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} onAdd={() => setModal('staff')} onToggle={toggleStaff} />}
         {view === 'stores' && <Stores stores={stores} people={people} onAdd={() => setModal('store')} onToggle={toggleStore} onOpen={(id) => { setSelectedStore(id); setView('overview'); }} />}
       </section>
 
-      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.slice(0, 5).map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.label}</small></button>)}</nav>
+      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.filter((item) => item.id !== 'stores').map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.id === 'leave' ? 'Leave' : item.label}</small></button>)}</nav>
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
       {modal === 'staff' && <Modal title="Add staff member" description="Create a staff profile and assign it to a store." onClose={() => setModal(null)}><form onSubmit={addStaff} className="modal-form"><label>Full name<input name="name" placeholder="e.g. Lerato Nkosi" required /></label><label>Role<select name="role"><option>Sales associate</option><option>Store manager</option><option>Cashier</option><option>Stock assistant</option></select></label><label>Store<select name="store">{stores.filter((store) => store.active).map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>4-digit clock PIN<input name="pin" inputMode="numeric" pattern="[0-9]{4}" maxLength={4} placeholder="0000" required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Add staff member</button></div></form></Modal>}
       {modal === 'store' && <Modal title="Add a store" description="Set up a new location before assigning staff." onClose={() => setModal(null)}><form onSubmit={addStore} className="modal-form"><label>Store name<input name="name" placeholder="e.g. Brooklyn Mall" required /></label><label>City or area<input name="location" placeholder="e.g. Pretoria" required /></label><label>Store code<input name="code" placeholder="e.g. BKL" minLength={2} maxLength={5} required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Create store</button></div></form></Modal>}
@@ -229,8 +284,16 @@ function ClockStation({ stores, people, records, selectedStore, setSelectedStore
   return <div className="single-page clock-page"><section className="clock-station-card"><div className="station-brand"><span className="brand-mark">P</span><span>Staff clock</span></div><p className="station-date" suppressHydrationWarning>{formatDate(now)}</p><div className="station-time" suppressHydrationWarning>{now.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</div><div className="station-controls"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}>{stores.filter((store) => store.active).map((store) => <option value={store.id} key={store.id}>{store.name} · {store.location}</option>)}</select></label><label>Your name<select value={selectedEmployee} onChange={(event) => setSelectedEmployee(event.target.value)}>{storePeople.map((person) => <option value={person.id} key={person.id}>{person.name} · {person.role}</option>)}</select></label></div>{activeEmployee && <div className="employee-action"><span className="avatar gold large">{initials(activeEmployee.name)}</span><div><b>{activeEmployee.name}</b><small>{activeEmployee.clockedIn ? `On shift since ${activeEmployee.clockIn}` : 'Ready to start your shift'}</small></div></div>}<button className={`station-action ${activeEmployee?.clockedIn ? 'clock-out' : ''}`} onClick={onAction}>{activeEmployee?.clockedIn ? 'Clock out' : 'Clock in'} <span>→</span></button><p className="station-hint">Choose your name, then tap once. Your time is recorded immediately.</p></section><section className="panel recent-panel"><div className="panel-heading"><div><h3>Today at this store</h3><p>Most recent attendance activity</p></div><span className="live-pill">● LIVE</span></div><div className="record-list">{recent.map((record) => { const person = people.find((item) => item.id === record.employeeId); return <div className="record-compact" key={record.id}><span className="avatar blue">{person ? initials(person.name) : '?'}</span><p><b>{person?.name}</b><small>{record.outTime ? `Completed at ${record.outTime}` : `Clocked in at ${record.inTime}`}</small></p><span className={`status ${record.outTime ? 'away' : 'present'}`}>{record.outTime ? 'Complete' : 'On shift'}</span></div>; })}</div></section></div>;
 }
 
-function Attendance({ records, people, stores, selectedStore, setSelectedStore, recordDate, setRecordDate, onExport }: { records: RecordItem[]; people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; recordDate: string; setRecordDate: (date: string) => void; onExport: () => void }) {
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">DAILY RECORDS</p><h2>Attendance register</h2><p>Review every arrival and departure across your stores.</p></div><button className="secondary-button" onClick={onExport}>↓ Export CSV</button></section><section className="filter-bar"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>Date<input type="date" value={recordDate} onChange={(event) => setRecordDate(event.target.value)} /></label><div className="filter-summary"><b>{records.length}</b><span>attendance records</span></div></section><section className="panel table-panel"><div className="attendance-table"><div className="table-head"><span>Employee</span><span>Store</span><span>Clock in</span><span>Clock out</span><span>Hours</span><span>Status</span></div>{records.length ? records.map((record, index) => { const person = people.find((item) => item.id === record.employeeId); const store = stores.find((item) => item.id === record.storeId); return <div className="table-row" key={record.id}><span className="employee-cell"><i className={`avatar ${tones[index % tones.length]}`}>{person ? initials(person.name) : '?'}</i><span><b>{person?.name}</b><small>{person?.role}</small></span></span><span data-label="Store">{store?.name}</span><span data-label="Clock in">{record.inTime}</span><span data-label="Clock out">{record.outTime ?? '—'}</span><span data-label="Hours">{record.hours?.toFixed(1) ?? 'In progress'}</span><span data-label="Status"><i className={`status ${record.status === 'Late' ? 'late' : record.status === 'Complete' ? 'away' : 'present'}`}>{record.status}</i></span></div>; }) : <EmptyState title="No attendance found" note="Try another date or store." />}</div></section></div>;
+function Attendance({ records, people, stores, selectedStore, setSelectedStore, recordDate, setRecordDate, hoursByRecord, holidays, onExport }: { records: RecordItem[]; people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; recordDate: string; setRecordDate: (date: string) => void; hoursByRecord: Map<string, HoursBreakdown>; holidays: PublicHoliday[]; onExport: () => void }) {
+  const holiday = holidays.find((item) => item.date === recordDate);
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">DAILY RECORDS</p><h2>Attendance register</h2><p>Worked time excludes the configured 60-minute weekday meal break.</p></div><button className="secondary-button" onClick={onExport}>↓ Export CSV</button></section>{holiday && <div className="holiday-banner"><span>◆</span><div><b>South African public holiday</b><small>{holiday.name}{holiday.observed ? ' · observed' : ''}</small></div></div>}<section className="filter-bar"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>Date<input type="date" value={recordDate} onChange={(event) => setRecordDate(event.target.value)} /></label><div className="filter-summary"><b>{records.length}</b><span>attendance records</span></div></section><section className="panel table-panel"><div className="attendance-table hours-table"><div className="table-head"><span>Employee</span><span>Store</span><span>In / out</span><span>Worked</span><span>Ordinary</span><span>Overtime</span><span>Public holiday</span></div>{records.length ? records.map((record, index) => { const person = people.find((item) => item.id === record.employeeId); const store = stores.find((item) => item.id === record.storeId); const hours = hoursByRecord.get(record.id); return <div className="table-row" key={record.id}><span className="employee-cell"><i className={`avatar ${tones[index % tones.length]}`}>{person ? initials(person.name) : '?'}</i><span><b>{person?.name}</b><small>{record.status}</small></span></span><span data-label="Store">{store?.name}</span><span data-label="In / out">{record.inTime} / {record.outTime ?? '—'}</span><span data-label="Worked">{hours?.worked.toFixed(1) ?? 'In progress'}</span><span data-label="Ordinary">{hours?.ordinary.toFixed(1) ?? '—'}</span><span data-label="Overtime"><i className={hours?.overtime ? 'hours-overtime' : ''}>{hours?.overtime.toFixed(1) ?? '—'}</i></span><span data-label="Public holiday">{hours?.publicHoliday.toFixed(1) ?? '—'}</span></div>; }) : <EmptyState title="No attendance found" note="Try another date or store." />}</div></section></div>;
+}
+
+function LeaveAndHours({ requests, people, stores, holidays, hoursByRecord, onDecision }: { requests: LeaveRequest[]; people: Person[]; stores: Store[]; holidays: PublicHoliday[]; hoursByRecord: Map<string, HoursBreakdown>; onDecision: (id: string, status: 'approved' | 'rejected') => void }) {
+  const pending = requests.filter((request) => request.status === 'pending');
+  const overtime = Array.from(hoursByRecord.values()).reduce((sum, item) => sum + item.overtime, 0);
+  const upcoming = holidays.filter((holiday) => holiday.date >= today).slice(0, 4);
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>No scheduled meal break</small></article><article className="rule-card highlight"><span>ORDINARY LIMIT</span><b>45 hours/week</b><small>Hours above this are flagged as overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Across loaded attendance records</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Hours are classified for review, not used to calculate salary. Store operating hours and individual employee rosters remain separate.</p></div>;
 }
 
 function Staff({ people, stores, selectedStore, setSelectedStore, onAdd, onToggle }: { people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; onAdd: () => void; onToggle: (id: string) => void }) {

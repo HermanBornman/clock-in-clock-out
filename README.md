@@ -1,11 +1,14 @@
 # Presently — Staff Attendance
 
-Phase 2 of a mobile-friendly, multi-store attendance application. It includes:
+A mobile-friendly, multi-store attendance application. It includes:
 
 - Employee clock-in and clock-out
 - Public PIN-protected staff clock at `/clock`
 - Store and staff management
 - Daily attendance records with CSV export
+- Ordinary, overtime and public-holiday hour classification
+- PIN-protected holiday and sick-leave requests at `/leave`
+- Administrator leave approval and South African work-rule overview
 - A live administrator dashboard
 - Secure administrator sign-in and organisation onboarding
 - Shared Supabase PostgreSQL persistence with row-level security
@@ -33,3 +36,5 @@ Import this repository in Vercel or run `vercel`. The included configuration use
 ## Data modes
 
 With Supabase values configured, all stores, staff and attendance records use the protected shared database. Without them, Presently remains usable as a browser-only demo and clearly labels that mode in the interface.
+
+The configured store hours are 07:30–17:00 Monday–Friday and 08:00–13:00 Saturday. A 60-minute unpaid weekday meal break and a 45-hour ordinary weekly limit are used for hour classification. The current migration seeds the official 2026 South African public-holiday calendar.

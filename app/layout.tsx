@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import './phase-one.css';
 import './phase-two.css';
+import './phase-three.css';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
 

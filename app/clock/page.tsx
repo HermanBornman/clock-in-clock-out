@@ -135,7 +135,7 @@ export default function StaffClockPage() {
           <button className="station-action" onClick={resetPerson}>Done →</button>
         </div>}
 
-        <footer className="public-clock-footer">Need help? Ask your store manager. <Link href="/login">Administrator sign in</Link></footer>
+        <footer className="public-clock-footer"><Link href="/leave">Apply for holiday or record sick leave</Link><span>Need help? Ask your store manager.</span><Link href="/login">Administrator sign in</Link></footer>
       </section>
     </main>
   );
