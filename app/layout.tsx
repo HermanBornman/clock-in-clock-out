@@ -3,6 +3,7 @@ import './globals.css';
 import './phase-one.css';
 import './phase-two.css';
 import './phase-three.css';
+import './phase-four.css';
 
 const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
 const vercelHostname = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();

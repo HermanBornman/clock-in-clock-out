@@ -6,13 +6,14 @@ import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient as createSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
-type View = 'overview' | 'clock' | 'attendance' | 'leave' | 'staff' | 'stores';
+type View = 'overview' | 'clock' | 'attendance' | 'leave' | 'staff' | 'stores' | 'administrators';
 type Store = { id: string; name: string; location: string; code: string; active: boolean };
 type Person = { id: string; name: string; role: string; storeId: string; pin: string; active: boolean; clockedIn: boolean; clockIn?: string };
 type RecordItem = { id: string; employeeId: string; storeId: string; date: string; inTime: string; outTime?: string; status: 'On time' | 'Late' | 'Complete'; hours?: number };
 type LeaveRequest = { id: string; staffId: string; storeId: string; type: 'annual' | 'sick'; startDate: string; endDate: string; reason: string; status: 'pending' | 'approved' | 'rejected'; managerNote?: string; createdAt: string };
 type PublicHoliday = { date: string; name: string; observed: boolean };
 type HoursBreakdown = { worked: number; ordinary: number; overtime: number; publicHoliday: number };
+type AdministratorMember = { userId: string; email: string; role: 'admin' | 'manager'; active: boolean; pending: boolean; invitedAt: string; acceptedAt: string | null; storeIds: string[] };
 type SyncMode = 'demo' | 'connecting' | 'cloud' | 'error';
 
 const initialStores: Store[] = [
@@ -50,6 +51,7 @@ const nav: { id: View; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: '⌂' }, { id: 'clock', label: 'Clock station', icon: '◷' },
   { id: 'attendance', label: 'Attendance', icon: '▤' }, { id: 'leave', label: 'Leave & hours', icon: '◫' },
   { id: 'staff', label: 'Staff', icon: '♙' }, { id: 'stores', label: 'Stores', icon: '◇' },
+  { id: 'administrators', label: 'Administrators', icon: '⚙' },
 ];
 
 const demoHolidays: PublicHoliday[] = [
@@ -103,13 +105,17 @@ export default function Home() {
   const [selectedStore, setSelectedStore] = useState(cloudConfigured ? '' : 'rosebank');
   const [selectedEmployee, setSelectedEmployee] = useState(cloudConfigured ? '' : 'thandi');
   const [recordDate, setRecordDate] = useState(today);
-  const [modal, setModal] = useState<'staff' | 'store' | null>(null);
+  const [modal, setModal] = useState<'staff' | 'store' | 'administrator' | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [now, setNow] = useState(new Date());
   const [hydrated, setHydrated] = useState(false);
   const [syncMode, setSyncMode] = useState<SyncMode>(cloudConfigured ? 'connecting' : 'demo');
   const [organizationId, setOrganizationId] = useState('');
+  const [currentRole, setCurrentRole] = useState<'admin' | 'manager'>('admin');
+  const [administrators, setAdministrators] = useState<AdministratorMember[]>([]);
+  const [currentAdministratorId, setCurrentAdministratorId] = useState('');
+  const [administratorsLoading, setAdministratorsLoading] = useState(false);
   const [adminEmail, setAdminEmail] = useState('Administrator');
   const [supabase] = useState<SupabaseClient | null>(() => createSupabaseClient());
 
@@ -129,6 +135,7 @@ export default function Home() {
       if (membershipError) { setSyncMode('error'); setHydrated(true); return; }
       if (!membership) { router.replace('/onboarding'); return; }
       const orgId = String(membership.organization_id); setOrganizationId(orgId);
+      setCurrentRole(membership.role === 'manager' ? 'manager' : 'admin');
 
       const [storeResult, staffResult, attendanceResult, leaveResult, holidayResult] = await Promise.all([
         supabase.from('stores').select('*').eq('organization_id', orgId).order('name'),
@@ -162,7 +169,7 @@ export default function Home() {
   const administratorName = adminEmail === 'Administrator' ? 'Administrator' : adminEmail.split('@')[0];
   const hoursByRecord = useMemo(() => calculateHours(records, holidays), [records, holidays]);
 
-  function switchView(next: View) { if ((next === 'overview' || next === 'clock') && selectedStore === 'all') setSelectedStore(stores.find((store) => store.active)?.id ?? 'rosebank'); setView(next); setMenuOpen(false); }
+  function switchView(next: View) { if (next === 'administrators' && currentRole !== 'admin') return; if ((next === 'overview' || next === 'clock') && selectedStore === 'all') setSelectedStore(stores.find((store) => store.active)?.id ?? 'rosebank'); setView(next); setMenuOpen(false); if (next === 'administrators') void loadAdministrators(); }
   async function addStaff(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); const name = String(form.get('name') ?? '');
     const role = String(form.get('role')); const storeId = String(form.get('store')); const pin = String(form.get('pin'));
@@ -228,6 +235,51 @@ export default function Home() {
     setStores((current) => current.map((item) => item.id === id ? { ...item, active } : item));
   }
   async function signOut() { await supabase?.auth.signOut(); router.replace('/login'); }
+  async function administratorFetch(path = '', options: RequestInit = {}) {
+    if (!supabase) throw new Error('Cloud access is unavailable.');
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+    const response = await fetch(`/api/administrators${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers ?? {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? 'Administrator request failed.');
+    return payload;
+  }
+  async function loadAdministrators() {
+    if (syncMode !== 'cloud' || currentRole !== 'admin') return;
+    setAdministratorsLoading(true);
+    try {
+      const payload = await administratorFetch();
+      setAdministrators(payload.members ?? []); setCurrentAdministratorId(payload.currentUserId ?? '');
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Could not load administrators.'); }
+    finally { setAdministratorsLoading(false); }
+  }
+  async function inviteAdministrator(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const role = String(form.get('role')) as 'admin' | 'manager';
+    const storeIds = form.getAll('stores').map(String);
+    try {
+      const payload = await administratorFetch('', { method: 'POST', body: JSON.stringify({ email: String(form.get('email') ?? ''), role, storeIds }) });
+      setModal(null); setToast(payload.message); await loadAdministrators();
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Invitation failed.'); }
+  }
+  async function changeAdministrator(userId: string, action: 'suspend' | 'restore') {
+    try {
+      const payload = await administratorFetch('', { method: 'PATCH', body: JSON.stringify({ userId, action }) });
+      setToast(payload.message); await loadAdministrators();
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Access could not be updated.'); }
+  }
+  async function removeAdministrator(userId: string) {
+    if (!window.confirm('Remove this person’s administrator access?')) return;
+    try {
+      const payload = await administratorFetch(`?userId=${encodeURIComponent(userId)}`, { method: 'DELETE' });
+      setToast(payload.message); await loadAdministrators();
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Access could not be removed.'); }
+  }
   async function decideLeave(id: string, status: 'approved' | 'rejected') {
     if (syncMode === 'cloud' && supabase) {
       const { error } = await supabase.from('leave_requests').update({ status, decided_at: new Date().toISOString() }).eq('id', id);
@@ -246,12 +298,12 @@ export default function Home() {
       <button className={`mobile-scrim ${menuOpen ? 'show' : ''}`} aria-label="Close menu" onClick={() => setMenuOpen(false)} />
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
         <div className="brand"><span className="brand-mark">P</span><span>Presently</span><button className="close-menu" aria-label="Close menu" onClick={() => setMenuOpen(false)}>×</button></div>
-        <nav>{nav.map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => switchView(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+        <nav>{nav.filter((item) => currentRole === 'admin' || item.id !== 'administrators').map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => switchView(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav>
         <div className="sidebar-bottom"><div className={`sync-status ${syncMode}`}>{syncMode === 'cloud' ? 'Cloud data connected' : syncMode === 'connecting' ? 'Connecting securely…' : syncMode === 'error' ? 'Cloud connection needs attention' : 'Local demo data'}</div><div className="support-card"><span>{syncMode === 'cloud' ? 'Phase 2 workspace' : 'Preview workspace'}</span><small>{syncMode === 'cloud' ? 'Shared securely across devices' : 'Connect Supabase for shared data'}</small></div><div className="profile"><span className="avatar plum">NM</span><span><b>{adminEmail.split('@')[0]}</b><small>Administrator</small></span><button className="signout-button" onClick={syncMode === 'cloud' ? signOut : undefined}>{syncMode === 'cloud' ? 'Sign out' : '⋮'}</button></div></div>
       </aside>
 
       <section className="main-content">
-        <header className="topbar"><button className="menu-button" aria-label="Open menu" onClick={() => setMenuOpen(true)}>☰</button><div><p className="eyebrow" suppressHydrationWarning>{formatDate(now).toUpperCase()}</p><h1>{view === 'overview' ? `Good morning, ${administratorName}` : nav.find((item) => item.id === view)?.label}</h1></div><div className="top-actions"><button className="icon-button" aria-label="Notifications">♢<span /></button>{view === 'stores' ? <button className="primary-button" onClick={() => setModal('store')}>＋ Add store</button> : <button className="primary-button" onClick={() => { if (stores.some((store) => store.active)) setModal('staff'); else { setToast('Add an active store before adding staff.'); setView('stores'); } }}>＋ Add staff member</button>}</div></header>
+        <header className="topbar"><button className="menu-button" aria-label="Open menu" onClick={() => setMenuOpen(true)}>☰</button><div><p className="eyebrow" suppressHydrationWarning>{formatDate(now).toUpperCase()}</p><h1>{view === 'overview' ? `Good morning, ${administratorName}` : nav.find((item) => item.id === view)?.label}</h1></div><div className="top-actions"><button className="icon-button" aria-label="Notifications">♢<span /></button>{currentRole === 'admin' && (view === 'stores' ? <button className="primary-button" onClick={() => setModal('store')}>＋ Add store</button> : view === 'administrators' ? <button className="primary-button" onClick={() => setModal('administrator')}>＋ Invite administrator</button> : <button className="primary-button" onClick={() => { if (stores.some((store) => store.active)) setModal('staff'); else { setToast('Add an active store before adding staff.'); setView('stores'); } }}>＋ Add staff member</button>)}</div></header>
 
         <div className={`cloud-banner ${syncMode === 'cloud' ? 'cloud' : ''}`}><span>{syncMode === 'cloud' ? '✓ Changes are syncing securely across every device.' : syncMode === 'connecting' ? 'Connecting to your secure workspace…' : syncMode === 'error' ? 'Cloud setup is incomplete. The migration or environment values may need attention.' : 'You are viewing the device-local demo. Connect Supabase to activate Phase 2 cloud sync and administrator access.'}</span><Link href="/login">Set up cloud access →</Link></div>
         {view === 'overview' && (syncMode === 'cloud' && stores.length === 0
@@ -260,14 +312,16 @@ export default function Home() {
         {view === 'clock' && <ClockStation stores={stores} people={people} records={records} selectedStore={selectedStore} setSelectedStore={setSelectedStore} selectedEmployee={effectiveSelectedEmployee} setSelectedEmployee={setSelectedEmployee} activeEmployee={activeEmployee} now={now} onAction={clockAction} />}
         {view === 'attendance' && <Attendance records={filteredRecords} people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} recordDate={recordDate} setRecordDate={setRecordDate} hoursByRecord={hoursByRecord} holidays={holidays} onExport={exportCsv} />}
         {view === 'leave' && <LeaveAndHours requests={leaveRequests} people={people} stores={stores} holidays={holidays} hoursByRecord={hoursByRecord} onDecision={decideLeave} />}
-        {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} onAdd={() => setModal('staff')} onToggle={toggleStaff} />}
-        {view === 'stores' && <Stores stores={stores} people={people} onAdd={() => setModal('store')} onToggle={toggleStore} onOpen={(id) => { setSelectedStore(id); setView('overview'); }} />}
+        {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} canManage={currentRole === 'admin'} onAdd={() => setModal('staff')} onToggle={toggleStaff} />}
+        {view === 'stores' && <Stores stores={stores} people={people} canManage={currentRole === 'admin'} onAdd={() => setModal('store')} onToggle={toggleStore} onOpen={(id) => { setSelectedStore(id); setView('overview'); }} />}
+        {view === 'administrators' && currentRole === 'admin' && <Administrators members={administrators} stores={stores} currentUserId={currentAdministratorId} loading={administratorsLoading} onInvite={() => setModal('administrator')} onChange={changeAdministrator} onRemove={removeAdministrator} />}
       </section>
 
-      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.filter((item) => item.id !== 'stores').map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.id === 'leave' ? 'Leave' : item.label}</small></button>)}</nav>
+      <nav className="mobile-nav" aria-label="Mobile navigation">{nav.filter((item) => item.id !== 'stores' && item.id !== 'administrators').map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.id === 'leave' ? 'Leave' : item.label}</small></button>)}</nav>
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
       {modal === 'staff' && <Modal title="Add staff member" description="Create a staff profile and assign it to a store." onClose={() => setModal(null)}><form onSubmit={addStaff} className="modal-form"><label>Full name<input name="name" placeholder="e.g. Lerato Nkosi" required /></label><label>Role<select name="role"><option>Sales associate</option><option>Store manager</option><option>Cashier</option><option>Stock assistant</option></select></label><label>Store<select name="store">{stores.filter((store) => store.active).map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>4-digit clock PIN<input name="pin" inputMode="numeric" pattern="[0-9]{4}" maxLength={4} placeholder="0000" required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Add staff member</button></div></form></Modal>}
       {modal === 'store' && <Modal title="Add a store" description="Set up a new location before assigning staff." onClose={() => setModal(null)}><form onSubmit={addStore} className="modal-form"><label>Store name<input name="name" placeholder="e.g. Brooklyn Mall" required /></label><label>City or area<input name="location" placeholder="e.g. Pretoria" required /></label><label>Store code<input name="code" placeholder="e.g. BKL" minLength={2} maxLength={5} required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Create store</button></div></form></Modal>}
+      {modal === 'administrator' && <Modal title="Invite an administrator" description="Send a secure invitation and choose what this person can access." onClose={() => setModal(null)}><form onSubmit={inviteAdministrator} className="modal-form admin-invite-form"><label>Email address<input name="email" type="email" placeholder="manager@yourcompany.co.za" required /></label><label>Access level<select name="role" defaultValue="manager"><option value="manager">Store manager</option><option value="admin">Administrator — all stores</option></select></label><fieldset><legend>Store access for managers</legend>{stores.filter((store) => store.active).map((store) => <label className="check-option" key={store.id}><input type="checkbox" name="stores" value={store.id} /><span>{store.name}<small>{store.location}</small></span></label>)}</fieldset><p className="form-note">Store selections are ignored when Administrator access is chosen.</p><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Send invitation</button></div></form></Modal>}
     </main>
   );
 }
@@ -296,13 +350,18 @@ function LeaveAndHours({ requests, people, stores, holidays, hoursByRecord, onDe
   return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>No scheduled meal break</small></article><article className="rule-card highlight"><span>ORDINARY LIMIT</span><b>45 hours/week</b><small>Hours above this are flagged as overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Across loaded attendance records</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Hours are classified for review, not used to calculate salary. Store operating hours and individual employee rosters remain separate.</p></div>;
 }
 
-function Staff({ people, stores, selectedStore, setSelectedStore, onAdd, onToggle }: { people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; onAdd: () => void; onToggle: (id: string) => void }) {
-  const filtered = people.filter((person) => selectedStore === 'all' || person.storeId === selectedStore);
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>Staff management</h2><p>Assign people to stores and keep their clock access current.</p></div><button className="primary-button" onClick={onAdd}>＋ Add staff member</button></section><section className="filter-bar"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><div className="filter-summary"><b>{filtered.filter((person) => person.active).length}</b><span>active staff</span></div></section><section className="staff-grid">{filtered.map((person, index) => { const store = stores.find((item) => item.id === person.storeId); return <article className={`person-card ${!person.active ? 'inactive-card' : ''}`} key={person.id}><div className="person-top"><span className={`avatar large ${tones[index % tones.length]}`}>{initials(person.name)}</span><span className={`status ${person.active ? 'present' : 'away'}`}>{person.active ? 'Active' : 'Inactive'}</span></div><h3>{person.name}</h3><p>{person.role}</p><div className="person-meta"><span><small>STORE</small><b>{store?.name}</b></span><span><small>CLOCK PIN</small><b>••{person.pin.slice(-2)}</b></span></div><button className="card-action" onClick={() => onToggle(person.id)}>{person.active ? 'Deactivate access' : 'Restore access'}</button></article>; })}</section></div>;
+function Administrators({ members, stores, currentUserId, loading, onInvite, onChange, onRemove }: { members: AdministratorMember[]; stores: Store[]; currentUserId: string; loading: boolean; onInvite: () => void; onChange: (userId: string, action: 'suspend' | 'restore') => void; onRemove: (userId: string) => void }) {
+  const activeAdmins = members.filter((member) => member.role === 'admin' && member.active).length;
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">ACCESS CONTROL</p><h2>Administrators and managers</h2><p>Invite trusted people and control which stores they can access.</p></div><button className="primary-button" onClick={onInvite}>＋ Invite administrator</button></section><section className="admin-summary"><article><b>{activeAdmins}</b><span>active administrators</span></article><article><b>{members.filter((member) => member.role === 'manager' && member.active).length}</b><span>store managers</span></article><article><b>{members.filter((member) => member.pending).length}</b><span>pending invitations</span></article></section><section className="panel admin-access-panel"><div className="panel-heading"><div><h3>Workspace access</h3><p>Only active members can open protected organisation data.</p></div></div>{loading ? <div className="admin-loading">Loading access…</div> : members.length ? members.map((member, index) => { const assignedStores = stores.filter((store) => member.storeIds.includes(store.id)); const isCurrent = member.userId === currentUserId; return <article className={`admin-row ${!member.active ? 'inactive-card' : ''}`} key={member.userId}><span className={`avatar large ${tones[index % tones.length]}`}>{member.email.slice(0, 2).toUpperCase()}</span><div className="admin-identity"><b>{member.email}{isCurrent ? ' · You' : ''}</b><small>{member.role === 'admin' ? 'Administrator · All stores' : `Store manager · ${assignedStores.map((store) => store.name).join(', ') || 'No stores assigned'}`}</small></div><div className="admin-state"><span className={`leave-status ${member.pending ? 'pending' : member.active ? 'approved' : 'rejected'}`}>{member.pending ? 'Invitation pending' : member.active ? 'Active' : 'Suspended'}</span><small>{member.pending ? `Invited ${new Date(member.invitedAt).toLocaleDateString('en-ZA')}` : member.role === 'admin' ? 'Full workspace access' : `${member.storeIds.length} store${member.storeIds.length === 1 ? '' : 's'}`}</small></div><div className="admin-actions">{!isCurrent && <button onClick={() => onChange(member.userId, member.active ? 'suspend' : 'restore')}>{member.active ? 'Suspend' : 'Restore'}</button>}{!isCurrent && <button className="danger" onClick={() => onRemove(member.userId)}>Remove</button>}</div></article>; }) : <EmptyState title="No additional administrators" note="Invite an administrator or store manager to share access securely." />}</section><p className="rules-note">The final active administrator cannot be suspended or removed. Every administrator must use their own email address and login.</p></div>;
 }
 
-function Stores({ stores, people, onAdd, onToggle, onOpen }: { stores: Store[]; people: Person[]; onAdd: () => void; onToggle: (id: string) => void; onOpen: (id: string) => void }) {
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">LOCATIONS</p><h2>Store management</h2><p>See staffing and live attendance at every location.</p></div><button className="primary-button" onClick={onAdd}>＋ Add store</button></section><section className="store-grid">{stores.map((store, index) => { const team = people.filter((person) => person.storeId === store.id && person.active); const present = team.filter((person) => person.clockedIn).length; return <article className={`store-card ${!store.active ? 'inactive-card' : ''}`} key={store.id}><div className={`store-visual store-${index % 3}`}><span>{store.code}</span><i>{store.active ? 'Open today' : 'Inactive'}</i></div><div className="store-card-body"><div><p className="eyebrow">{store.location.toUpperCase()}</p><h3>{store.name}</h3></div><div className="store-stats"><span><b>{team.length}</b><small>Staff</small></span><span><b>{present}</b><small>On shift</small></span><span><b>{team.length ? Math.round((present / team.length) * 100) : 0}%</b><small>Present</small></span></div><div className="store-actions"><button className="secondary-button" onClick={() => onToggle(store.id)}>{store.active ? 'Deactivate' : 'Reactivate'}</button><button className="card-action solid" onClick={() => onOpen(store.id)} disabled={!store.active}>Open dashboard →</button></div></div></article>; })}</section></div>;
+function Staff({ people, stores, selectedStore, setSelectedStore, canManage, onAdd, onToggle }: { people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; canManage: boolean; onAdd: () => void; onToggle: (id: string) => void }) {
+  const filtered = people.filter((person) => selectedStore === 'all' || person.storeId === selectedStore);
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>Staff management</h2><p>Assign people to stores and keep their clock access current.</p></div>{canManage && <button className="primary-button" onClick={onAdd}>＋ Add staff member</button>}</section><section className="filter-bar"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><div className="filter-summary"><b>{filtered.filter((person) => person.active).length}</b><span>active staff</span></div></section><section className="staff-grid">{filtered.map((person, index) => { const store = stores.find((item) => item.id === person.storeId); return <article className={`person-card ${!person.active ? 'inactive-card' : ''}`} key={person.id}><div className="person-top"><span className={`avatar large ${tones[index % tones.length]}`}>{initials(person.name)}</span><span className={`status ${person.active ? 'present' : 'away'}`}>{person.active ? 'Active' : 'Inactive'}</span></div><h3>{person.name}</h3><p>{person.role}</p><div className="person-meta"><span><small>STORE</small><b>{store?.name}</b></span><span><small>CLOCK PIN</small><b>••{person.pin.slice(-2)}</b></span></div>{canManage && <button className="card-action" onClick={() => onToggle(person.id)}>{person.active ? 'Deactivate access' : 'Restore access'}</button>}</article>; })}</section></div>;
+}
+
+function Stores({ stores, people, canManage, onAdd, onToggle, onOpen }: { stores: Store[]; people: Person[]; canManage: boolean; onAdd: () => void; onToggle: (id: string) => void; onOpen: (id: string) => void }) {
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">LOCATIONS</p><h2>Store management</h2><p>See staffing and live attendance at every location.</p></div>{canManage && <button className="primary-button" onClick={onAdd}>＋ Add store</button>}</section><section className="store-grid">{stores.map((store, index) => { const team = people.filter((person) => person.storeId === store.id && person.active); const present = team.filter((person) => person.clockedIn).length; return <article className={`store-card ${!store.active ? 'inactive-card' : ''}`} key={store.id}><div className={`store-visual store-${index % 3}`}><span>{store.code}</span><i>{store.active ? 'Open today' : 'Inactive'}</i></div><div className="store-card-body"><div><p className="eyebrow">{store.location.toUpperCase()}</p><h3>{store.name}</h3></div><div className="store-stats"><span><b>{team.length}</b><small>Staff</small></span><span><b>{present}</b><small>On shift</small></span><span><b>{team.length ? Math.round((present / team.length) * 100) : 0}%</b><small>Present</small></span></div><div className={`store-actions ${canManage ? '' : 'single-action'}`}>{canManage && <button className="secondary-button" onClick={() => onToggle(store.id)}>{store.active ? 'Deactivate' : 'Reactivate'}</button>}<button className="card-action solid" onClick={() => onOpen(store.id)} disabled={!store.active}>Open dashboard →</button></div></div></article>; })}</section></div>;
 }
 
 function Modal({ title, description, onClose, children }: { title: string; description: string; onClose: () => void; children: React.ReactNode }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-heading"><div><p className="eyebrow">PRESENTLY ADMIN</p><h2 id="modal-title">{title}</h2><p>{description}</p></div><button onClick={onClose} aria-label="Close">×</button></div>{children}</section></div>; }
