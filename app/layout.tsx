@@ -4,7 +4,9 @@ import './phase-one.css';
 import './phase-two.css';
 import './phase-three.css';
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+const vercelHostname = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();
+const siteUrl = configuredSiteUrl || (vercelHostname ? `https://${vercelHostname}` : 'http://localhost:3000');
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
