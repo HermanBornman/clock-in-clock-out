@@ -108,7 +108,8 @@ export default function Home() {
   const [selectedStore, setSelectedStore] = useState(cloudConfigured ? '' : 'rosebank');
   const [selectedEmployee, setSelectedEmployee] = useState(cloudConfigured ? '' : 'thandi');
   const [recordDate, setRecordDate] = useState(today);
-  const [modal, setModal] = useState<'staff' | 'store' | 'administrator' | null>(null);
+  const [modal, setModal] = useState<'staff' | 'store' | 'administrator' | 'reset-pin' | 'change-store' | null>(null);
+  const [selectedStaffActionId, setSelectedStaffActionId] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [now, setNow] = useState(new Date());
@@ -145,7 +146,7 @@ export default function Home() {
 
       const [storeResult, staffResult, attendanceResult, leaveResult, holidayResult] = await Promise.all([
         supabase.from('stores').select('*').eq('organization_id', orgId).order('name'),
-        supabase.from('staff').select('id, organization_id, store_id, name, role, pin_last_two, active, created_at').eq('organization_id', orgId).order('name'),
+        supabase.from('staff').select('id, organization_id, store_id, name, role, pin_last_two, active, created_at').eq('organization_id', orgId).is('archived_at', null).order('name'),
         supabase.from('attendance').select('*').eq('organization_id', orgId).order('clock_in', { ascending: false }).limit(250),
         supabase.from('leave_requests').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }),
         supabase.from('public_holidays').select('*').gte('holiday_date', '2026-01-01').lte('holiday_date', '2026-12-31').order('holiday_date'),
@@ -181,9 +182,10 @@ export default function Home() {
     const role = String(form.get('role')); const storeId = String(form.get('store')); const pin = String(form.get('pin'));
     let id = `${name.toLowerCase().replace(/\W+/g, '-')}-${Date.now()}`;
     if (syncMode === 'cloud' && supabase) {
-      const { data, error } = await supabase.from('staff').insert({ organization_id: organizationId, name, role, store_id: storeId, pin_last_two: pin.slice(-2), active: true }).select('id').single();
-      if (error) { setToast(`Could not add staff: ${error.message}`); return; }
-      id = data.id;
+      try {
+        const payload = await staffFetch('', { method: 'POST', body: JSON.stringify({ name, role, storeId, pin }) });
+        id = payload.id;
+      } catch (error) { setToast(error instanceof Error ? error.message : 'Could not add staff.'); return; }
     }
     const person: Person = { id, name, role, storeId, pin, active: true, clockedIn: false };
     setPeople((current) => [...current, person]); setModal(null); setToast(`${name} was added to the team.`);
@@ -241,6 +243,71 @@ export default function Home() {
     setStores((current) => current.map((item) => item.id === id ? { ...item, active } : item));
   }
   async function signOut() { await supabase?.auth.signOut(); router.replace('/login'); }
+  async function staffFetch(path = '', options: RequestInit = {}) {
+    if (!supabase) throw new Error('Cloud access is unavailable.');
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+    const response = await fetch(`/api/staff${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers ?? {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? 'Staff request failed.');
+    return payload;
+  }
+  function openResetPin(id: string) { setSelectedStaffActionId(id); setModal('reset-pin'); }
+  async function resetStaffPin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const person = people.find((item) => item.id === selectedStaffActionId);
+    if (!person) return;
+    const pin = String(new FormData(event.currentTarget).get('pin') ?? '');
+    try {
+      let message = `${person.name}'s PIN was reset.`;
+      if (syncMode === 'cloud') {
+        const payload = await staffFetch('', { method: 'PATCH', body: JSON.stringify({ action: 'reset_pin', staffId: person.id, pin }) });
+        message = payload.message;
+      }
+      setPeople((current) => current.map((item) => item.id === person.id ? { ...item, pin } : item));
+      setModal(null); setSelectedStaffActionId(''); setToast(message);
+    } catch (error) { setToast(error instanceof Error ? error.message : 'The PIN could not be reset.'); }
+  }
+  function openChangeStore(id: string) {
+    const person = people.find((item) => item.id === id);
+    if (person?.clockedIn) { setToast('Clock this staff member out before changing their store.'); return; }
+    setSelectedStaffActionId(id); setModal('change-store');
+  }
+  async function changeStaffStore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const person = people.find((item) => item.id === selectedStaffActionId);
+    if (!person) return;
+    const storeId = String(new FormData(event.currentTarget).get('store') ?? '');
+    const store = stores.find((item) => item.id === storeId);
+    if (!store) return;
+    try {
+      let message = `${person.name} was moved to ${store.name}.`;
+      if (syncMode === 'cloud') {
+        const payload = await staffFetch('', { method: 'PATCH', body: JSON.stringify({ action: 'change_store', staffId: person.id, storeId }) });
+        message = payload.message;
+      }
+      setPeople((current) => current.map((item) => item.id === person.id ? { ...item, storeId } : item));
+      setModal(null); setSelectedStaffActionId(''); setToast(message);
+    } catch (error) { setToast(error instanceof Error ? error.message : 'The staff member could not be moved.'); }
+  }
+  async function removeStaff(id: string) {
+    const person = people.find((item) => item.id === id);
+    if (!person) return;
+    if (person.clockedIn) { setToast('Clock this staff member out before removing them.'); return; }
+    if (!window.confirm(`Remove ${person.name}? Their attendance and leave history will be preserved.`)) return;
+    try {
+      let message = `${person.name} was removed. Attendance and leave history were preserved.`;
+      if (syncMode === 'cloud') {
+        const payload = await staffFetch(`?staffId=${encodeURIComponent(id)}`, { method: 'DELETE' });
+        message = payload.message;
+      }
+      setPeople((current) => current.filter((item) => item.id !== id)); setToast(message);
+    } catch (error) { setToast(error instanceof Error ? error.message : 'The staff member could not be removed.'); }
+  }
   async function administratorFetch(path = '', options: RequestInit = {}) {
     if (!supabase) throw new Error('Cloud access is unavailable.');
     const { data } = await supabase.auth.getSession();
@@ -351,7 +418,7 @@ export default function Home() {
         {view === 'clock' && <ClockStation stores={stores} people={people} records={records} selectedStore={selectedStore} setSelectedStore={setSelectedStore} selectedEmployee={effectiveSelectedEmployee} setSelectedEmployee={setSelectedEmployee} activeEmployee={activeEmployee} now={now} onAction={clockAction} />}
         {view === 'attendance' && <Attendance records={filteredRecords} people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} recordDate={recordDate} setRecordDate={setRecordDate} hoursByRecord={hoursByRecord} holidays={holidays} onExport={exportCsv} />}
         {view === 'leave' && <LeaveAndHours requests={leaveRequests} people={people} stores={stores} holidays={holidays} hoursByRecord={hoursByRecord} onDecision={decideLeave} />}
-        {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} canManage={currentRole === 'admin'} onAdd={() => setModal('staff')} onToggle={toggleStaff} />}
+        {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} canManage={currentRole === 'admin'} onAdd={() => setModal('staff')} onToggle={toggleStaff} onResetPin={openResetPin} onChangeStore={openChangeStore} onRemove={removeStaff} />}
         {view === 'stores' && <Stores stores={stores} people={people} canManage={currentRole === 'admin'} onAdd={() => setModal('store')} onToggle={toggleStore} onOpen={(id) => { setSelectedStore(id); setView('overview'); }} />}
         {view === 'reports' && currentRole === 'admin' && <WeeklyReports setting={reportSetting} runs={reportRuns} loading={reportsLoading} onSave={saveReportSettings} onSend={sendTestReport} />}
         {view === 'administrators' && currentRole === 'admin' && <Administrators members={administrators} stores={stores} currentUserId={currentAdministratorId} loading={administratorsLoading} onInvite={() => setModal('administrator')} onChange={changeAdministrator} onRemove={removeAdministrator} />}
@@ -360,6 +427,8 @@ export default function Home() {
       <nav className="mobile-nav" aria-label="Mobile navigation">{nav.filter((item) => item.id !== 'stores' && item.id !== 'administrators' && item.id !== 'reports').map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => switchView(item.id)}><span>{item.icon}</span><small>{item.id === 'clock' ? 'Clock' : item.id === 'leave' ? 'Leave' : item.label}</small></button>)}</nav>
       {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
       {modal === 'staff' && <Modal title="Add staff member" description="Create a staff profile and assign it to a store." onClose={() => setModal(null)}><form onSubmit={addStaff} className="modal-form"><label>Full name<input name="name" placeholder="e.g. Lerato Nkosi" required /></label><label>Role<select name="role"><option>Sales associate</option><option>Store manager</option><option>Cashier</option><option>Stock assistant</option></select></label><label>Store<select name="store">{stores.filter((store) => store.active).map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><label>4-digit clock PIN<input name="pin" inputMode="numeric" pattern="[0-9]{4}" maxLength={4} placeholder="0000" required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Add staff member</button></div></form></Modal>}
+      {modal === 'reset-pin' && <Modal title="Reset clock PIN" description={`Choose a new four-digit PIN for ${people.find((person) => person.id === selectedStaffActionId)?.name ?? 'this staff member'}. The previous PIN cannot be viewed.`} onClose={() => { setModal(null); setSelectedStaffActionId(''); }}><form onSubmit={resetStaffPin} className="modal-form pin-reset-form"><label>New 4-digit clock PIN<input name="pin" type="password" inputMode="numeric" pattern="[0-9]{4}" minLength={4} maxLength={4} placeholder="••••" autoComplete="new-password" autoFocus required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => { setModal(null); setSelectedStaffActionId(''); }}>Cancel</button><button className="primary-button">Save new PIN</button></div></form></Modal>}
+      {modal === 'change-store' && <Modal title="Change staff store" description={`Move ${people.find((person) => person.id === selectedStaffActionId)?.name ?? 'this staff member'} to another active store. Historical records will not change.`} onClose={() => { setModal(null); setSelectedStaffActionId(''); }}><form onSubmit={changeStaffStore} className="modal-form pin-reset-form"><label>Assigned store<select name="store" defaultValue={people.find((person) => person.id === selectedStaffActionId)?.storeId}>{stores.filter((store) => store.active).map((store) => <option key={store.id} value={store.id}>{store.name} · {store.location}</option>)}</select></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => { setModal(null); setSelectedStaffActionId(''); }}>Cancel</button><button className="primary-button">Save store</button></div></form></Modal>}
       {modal === 'store' && <Modal title="Add a store" description="Set up a new location before assigning staff." onClose={() => setModal(null)}><form onSubmit={addStore} className="modal-form"><label>Store name<input name="name" placeholder="e.g. Brooklyn Mall" required /></label><label>City or area<input name="location" placeholder="e.g. Pretoria" required /></label><label>Store code<input name="code" placeholder="e.g. BKL" minLength={2} maxLength={5} required /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Create store</button></div></form></Modal>}
       {modal === 'administrator' && <Modal title="Invite an administrator" description="Send a secure invitation and choose what this person can access." onClose={() => setModal(null)}><form onSubmit={inviteAdministrator} className="modal-form admin-invite-form"><label>Email address<input name="email" type="email" placeholder="manager@yourcompany.co.za" required /></label><label>Access level<select name="role" defaultValue="manager"><option value="manager">Store manager</option><option value="admin">Administrator — all stores</option></select></label><fieldset><legend>Store access for managers</legend>{stores.filter((store) => store.active).map((store) => <label className="check-option" key={store.id}><input type="checkbox" name="stores" value={store.id} /><span>{store.name}<small>{store.location}</small></span></label>)}</fieldset><p className="form-note">Store selections are ignored when Administrator access is chosen.</p><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancel</button><button className="primary-button">Send invitation</button></div></form></Modal>}
     </main>
@@ -399,9 +468,9 @@ function Administrators({ members, stores, currentUserId, loading, onInvite, onC
   return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">ACCESS CONTROL</p><h2>Administrators and managers</h2><p>Invite trusted people and control which stores they can access.</p></div><button className="primary-button" onClick={onInvite}>＋ Invite administrator</button></section><section className="admin-summary"><article><b>{activeAdmins}</b><span>active administrators</span></article><article><b>{members.filter((member) => member.role === 'manager' && member.active).length}</b><span>store managers</span></article><article><b>{members.filter((member) => member.pending).length}</b><span>pending invitations</span></article></section><section className="panel admin-access-panel"><div className="panel-heading"><div><h3>Workspace access</h3><p>Only active members can open protected organisation data.</p></div></div>{loading ? <div className="admin-loading">Loading access…</div> : members.length ? members.map((member, index) => { const assignedStores = stores.filter((store) => member.storeIds.includes(store.id)); const isCurrent = member.userId === currentUserId; return <article className={`admin-row ${!member.active ? 'inactive-card' : ''}`} key={member.userId}><span className={`avatar large ${tones[index % tones.length]}`}>{member.email.slice(0, 2).toUpperCase()}</span><div className="admin-identity"><b>{member.email}{isCurrent ? ' · You' : ''}</b><small>{member.role === 'admin' ? 'Administrator · All stores' : `Store manager · ${assignedStores.map((store) => store.name).join(', ') || 'No stores assigned'}`}</small></div><div className="admin-state"><span className={`leave-status ${member.pending ? 'pending' : member.active ? 'approved' : 'rejected'}`}>{member.pending ? 'Invitation pending' : member.active ? 'Active' : 'Suspended'}</span><small>{member.pending ? `Invited ${new Date(member.invitedAt).toLocaleDateString('en-ZA')}` : member.role === 'admin' ? 'Full workspace access' : `${member.storeIds.length} store${member.storeIds.length === 1 ? '' : 's'}`}</small></div><div className="admin-actions">{!isCurrent && <button onClick={() => onChange(member.userId, member.active ? 'suspend' : 'restore')}>{member.active ? 'Suspend' : 'Restore'}</button>}{!isCurrent && <button className="danger" onClick={() => onRemove(member.userId)}>Remove</button>}</div></article>; }) : <EmptyState title="No additional administrators" note="Invite an administrator or store manager to share access securely." />}</section><p className="rules-note">The final active administrator cannot be suspended or removed. Every administrator must use their own email address and login.</p></div>;
 }
 
-function Staff({ people, stores, selectedStore, setSelectedStore, canManage, onAdd, onToggle }: { people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; canManage: boolean; onAdd: () => void; onToggle: (id: string) => void }) {
+function Staff({ people, stores, selectedStore, setSelectedStore, canManage, onAdd, onToggle, onResetPin, onChangeStore, onRemove }: { people: Person[]; stores: Store[]; selectedStore: string; setSelectedStore: (id: string) => void; canManage: boolean; onAdd: () => void; onToggle: (id: string) => void; onResetPin: (id: string) => void; onChangeStore: (id: string) => void; onRemove: (id: string) => void }) {
   const filtered = people.filter((person) => selectedStore === 'all' || person.storeId === selectedStore);
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>Staff management</h2><p>Assign people to stores and keep their clock access current.</p></div>{canManage && <button className="primary-button" onClick={onAdd}>＋ Add staff member</button>}</section><section className="filter-bar"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><div className="filter-summary"><b>{filtered.filter((person) => person.active).length}</b><span>active staff</span></div></section><section className="staff-grid">{filtered.map((person, index) => { const store = stores.find((item) => item.id === person.storeId); return <article className={`person-card ${!person.active ? 'inactive-card' : ''}`} key={person.id}><div className="person-top"><span className={`avatar large ${tones[index % tones.length]}`}>{initials(person.name)}</span><span className={`status ${person.active ? 'present' : 'away'}`}>{person.active ? 'Active' : 'Inactive'}</span></div><h3>{person.name}</h3><p>{person.role}</p><div className="person-meta"><span><small>STORE</small><b>{store?.name}</b></span><span><small>CLOCK PIN</small><b>••{person.pin.slice(-2)}</b></span></div>{canManage && <button className="card-action" onClick={() => onToggle(person.id)}>{person.active ? 'Deactivate access' : 'Restore access'}</button>}</article>; })}</section></div>;
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">TEAM DIRECTORY</p><h2>Staff management</h2><p>Assign people to stores and keep their clock access current.</p></div>{canManage && <button className="primary-button" onClick={onAdd}>＋ Add staff member</button>}</section><section className="filter-bar"><label>Store<select value={selectedStore} onChange={(event) => setSelectedStore(event.target.value)}><option value="all">All stores</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label><div className="filter-summary"><b>{filtered.filter((person) => person.active).length}</b><span>active staff</span></div></section><section className="staff-grid">{filtered.map((person, index) => { const store = stores.find((item) => item.id === person.storeId); return <article className={`person-card ${!person.active ? 'inactive-card' : ''}`} key={person.id}><div className="person-top"><span className={`avatar large ${tones[index % tones.length]}`}>{initials(person.name)}</span><span className={`status ${person.active ? 'present' : 'away'}`}>{person.active ? 'Active' : 'Inactive'}</span></div><h3>{person.name}</h3><p>{person.role}</p><div className="person-meta"><span><small>STORE</small><b>{store?.name}</b></span><span><small>CLOCK PIN</small><b>••{person.pin.slice(-2)}</b></span></div>{canManage && <div className="staff-card-actions"><button className="card-action" onClick={() => onChangeStore(person.id)}>Change store</button><button className="card-action" onClick={() => onResetPin(person.id)}>Reset PIN</button><button className="card-action" onClick={() => onToggle(person.id)}>{person.active ? 'Deactivate' : 'Restore'}</button><button className="card-action danger" onClick={() => onRemove(person.id)}>Remove</button></div>}</article>; })}</section></div>;
 }
 
 function Stores({ stores, people, canManage, onAdd, onToggle, onOpen }: { stores: Store[]; people: Person[]; canManage: boolean; onAdd: () => void; onToggle: (id: string) => void; onOpen: (id: string) => void }) {
