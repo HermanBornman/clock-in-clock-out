@@ -5,7 +5,7 @@ import { classifyDailyStatus } from '../lib/attendance/daily-status.ts';
 
 const schedules: WorkScheduleInput[] = [
   ...[1, 2, 3, 4, 5].map((dayOfWeek) => ({ dayOfWeek, opensAtMinute: 7 * 60 + 30, closesAtMinute: 17 * 60, unpaidBreakMinutes: 60 })),
-  { dayOfWeek: 6, opensAtMinute: 8 * 60, closesAtMinute: 13 * 60, unpaidBreakMinutes: 0 },
+  { dayOfWeek: 6, opensAtMinute: 8 * 60, closesAtMinute: 13 * 60, unpaidBreakMinutes: 30 },
   { dayOfWeek: 7, opensAtMinute: null, closesAtMinute: null, unpaidBreakMinutes: 0 },
 ];
 
@@ -51,10 +51,10 @@ test('recognises only the first two Saturdays worked in a calendar month as ordi
     record('sat3', '2026-09-19', '08:00', '13:00'),
   ];
   const result = calculateAttendanceHours(shifts, schedules, []);
-  assert.equal(result.get('sat1')?.ordinary, 5);
-  assert.equal(result.get('sat2')?.ordinary, 5);
+  assert.equal(result.get('sat1')?.ordinary, 4.5);
+  assert.equal(result.get('sat2')?.ordinary, 4.5);
   assert.equal(result.get('sat3')?.overtime, 0);
-  assert.equal(result.get('sat3')?.ordinary, 5, 'third Saturday fills unmet weekday hours before overtime');
+  assert.equal(result.get('sat3')?.ordinary, 4.5, 'third Saturday fills unmet weekday hours before overtime');
 });
 
 test('third Saturday becomes overtime after that week\'s scheduled hours are complete', () => {
@@ -62,7 +62,7 @@ test('third Saturday becomes overtime after that week\'s scheduled hours are com
   for (const [index, date] of ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'].entries()) shifts.push(record(`weekday-${index}`, date, '07:30', '17:00'));
   shifts.push(record('sat3', '2026-09-19', '08:00', '13:00'));
   const result = calculateAttendanceHours(shifts, schedules, []);
-  assert.deepEqual(result.get('sat3'), { worked: 5, ordinary: 0, overtime: 5, publicHoliday: 0 });
+  assert.deepEqual(result.get('sat3'), { worked: 4.5, ordinary: 0, overtime: 4.5, publicHoliday: 0 });
 });
 
 test('classifies public-holiday work separately as overtime hours', () => {

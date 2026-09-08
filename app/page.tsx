@@ -14,8 +14,10 @@ type RecordItem = { id: string; employeeId: string; storeId: string; date: strin
 type LeaveRequest = { id: string; staffId: string; storeId: string; type: 'annual' | 'sick'; startDate: string; endDate: string; reason: string; status: 'pending' | 'approved' | 'rejected'; managerNote?: string; createdAt: string };
 type PublicHoliday = { date: string; name: string; observed: boolean };
 type AdministratorMember = { userId: string; email: string; role: 'admin' | 'manager'; active: boolean; pending: boolean; invitedAt: string; acceptedAt: string | null; storeIds: string[] };
-type ReportRun = { week_start: string; week_end: string; recipient_email: string; status: 'sending' | 'sent' | 'failed'; error_message: string | null; completed_at: string | null; created_at: string };
+type ReportRun = { report_date: string; period_start: string; period_end: string; recipient_email: string; trigger: 'scheduled' | 'manual'; status: 'sending' | 'sent' | 'failed'; error_message: string | null; completed_at: string | null; created_at: string };
 type ReportSetting = { recipientEmail: string; enabled: boolean; updatedAt: string | null; deliveryConfigured: boolean };
+type ReportMinutes = { normalMinutes: number; overtimeOneHalfMinutes: number; overtimeDoubleMinutes: number; totalOvertimeMinutes: number };
+type ReportPreview = { reportDate: string; periodStart: string; periodEnd: string; recipient: string; branches: Array<{ branchId: string; branchName: string; employees: Array<ReportMinutes & { employeeId: string; employeeName: string }>; subtotal: Omit<ReportMinutes, 'totalOvertimeMinutes'>; totalOvertimeMinutes: number }>; companyTotal: ReportMinutes };
 type SyncMode = 'demo' | 'connecting' | 'cloud' | 'error';
 
 const TIMEZONE = 'Africa/Johannesburg';
@@ -71,7 +73,7 @@ const demoHolidays: PublicHoliday[] = [
 
 const workSchedules: WorkScheduleInput[] = [
   ...[1, 2, 3, 4, 5].map((dayOfWeek) => ({ dayOfWeek, opensAtMinute: 7 * 60 + 30, closesAtMinute: 17 * 60, unpaidBreakMinutes: 60 })),
-  { dayOfWeek: 6, opensAtMinute: 8 * 60, closesAtMinute: 13 * 60, unpaidBreakMinutes: 0 },
+  { dayOfWeek: 6, opensAtMinute: 8 * 60, closesAtMinute: 13 * 60, unpaidBreakMinutes: 30 },
   { dayOfWeek: 7, opensAtMinute: null, closesAtMinute: null, unpaidBreakMinutes: 0 },
 ];
 
@@ -115,6 +117,7 @@ export default function Home() {
   const [administratorsLoading, setAdministratorsLoading] = useState(false);
   const [reportSetting, setReportSetting] = useState<ReportSetting>({ recipientEmail: '', enabled: false, updatedAt: null, deliveryConfigured: false });
   const [reportRuns, setReportRuns] = useState<ReportRun[]>([]);
+  const [reportPreview, setReportPreview] = useState<ReportPreview | null>(null);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [adminEmail, setAdminEmail] = useState('Administrator');
   const [supabase] = useState<SupabaseClient | null>(() => createSupabaseClient());
@@ -375,8 +378,24 @@ export default function Home() {
   }
   async function sendTestReport() {
     setReportsLoading(true);
-    try { const payload = await reportFetch({ method: 'POST' }); setToast(payload.message); await loadReportSettings(); }
-    catch (error) { setToast(error instanceof Error ? error.message : 'Test report could not be sent.'); }
+    try { const payload = await managementReportFetch({ method: 'POST' }); setToast(payload.message); await loadReportSettings(); }
+    catch (error) { setToast(error instanceof Error ? error.message : 'Report could not be sent.'); }
+    finally { setReportsLoading(false); }
+  }
+  async function managementReportFetch(options: RequestInit = {}) {
+    if (!supabase) throw new Error('Cloud access is unavailable.');
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error('Your session has expired. Please sign in again.');
+    const response = await fetch('/api/management-hours-report', { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers ?? {}) } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? 'Management report request failed.');
+    return payload;
+  }
+  async function generateReportPreview() {
+    setReportsLoading(true);
+    try { setReportPreview(await managementReportFetch()); }
+    catch (error) { setToast(error instanceof Error ? error.message : 'Preview could not be generated.'); }
     finally { setReportsLoading(false); }
   }
   async function decideLeave(id: string, status: 'approved' | 'rejected') {
@@ -413,7 +432,7 @@ export default function Home() {
         {view === 'leave' && <LeaveAndHours requests={leaveRequests} people={people} stores={stores} holidays={holidays} hoursByRecord={hoursByRecord} onDecision={decideLeave} />}
         {view === 'staff' && <Staff people={people} stores={stores} selectedStore={selectedStore} setSelectedStore={setSelectedStore} canManage={currentRole === 'admin'} onAdd={() => setModal('staff')} onToggle={toggleStaff} onResetPin={openResetPin} onChangeStore={openChangeStore} onRemove={removeStaff} />}
         {view === 'stores' && <Stores stores={stores} people={people} canManage={currentRole === 'admin'} onAdd={() => setModal('store')} onToggle={toggleStore} onOpen={(id) => { setSelectedStore(id); setView('overview'); }} />}
-        {view === 'reports' && currentRole === 'admin' && <WeeklyReports setting={reportSetting} runs={reportRuns} loading={reportsLoading} onSave={saveReportSettings} onSend={sendTestReport} />}
+        {view === 'reports' && currentRole === 'admin' && <WeeklyReports setting={reportSetting} runs={reportRuns} preview={reportPreview} loading={reportsLoading} onSave={saveReportSettings} onPreview={generateReportPreview} onSend={sendTestReport} />}
         {view === 'administrators' && currentRole === 'admin' && <Administrators members={administrators} stores={stores} currentUserId={currentAdministratorId} loading={administratorsLoading} onInvite={() => setModal('administrator')} onChange={changeAdministrator} onRemove={removeAdministrator} />}
       </section>
 
@@ -449,11 +468,50 @@ function LeaveAndHours({ requests, people, stores, holidays, hoursByRecord, onDe
   const pending = requests.filter((request) => request.status === 'pending');
   const overtime = Array.from(hoursByRecord.values()).reduce((sum, item) => sum + item.overtime, 0);
   const upcoming = holidays.filter((holiday) => holiday.date >= today).slice(0, 4);
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break · 17:30 OT threshold</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>First two Saturdays worked each month are ordinary</small></article><article className="rule-card highlight"><span>WEEKLY OVERTIME</span><b>After scheduled hours</b><small>Daily shortfalls are completed before overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Public-holiday hours are shown separately</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { timeZone: TIMEZONE, day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Time before 07:30 is excluded. If no lunch clock-out is recorded, the full one-hour unpaid break is deducted automatically.</p></div>;
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break · 17:30 OT threshold</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>30-minute unpaid break · first two Saturdays worked are ordinary</small></article><article className="rule-card highlight"><span>WEEKLY OVERTIME</span><b>After scheduled hours</b><small>Daily shortfalls are completed before overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Public-holiday hours are shown separately</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { timeZone: TIMEZONE, day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Time before 07:30 is excluded. If no lunch clock-out is recorded, the full one-hour unpaid break is deducted automatically.</p></div>;
 }
 
-function WeeklyReports({ setting, runs, loading, onSave, onSend }: { setting: ReportSetting; runs: ReportRun[]; loading: boolean; onSave: (event: FormEvent<HTMLFormElement>) => void; onSend: () => void }) {
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">AUTOMATED HR REPORTING</p><h2>Weekly all-branch report</h2><p>Every Monday at 07:00, HR receives the previous Monday–Sunday attendance report.</p></div><button className="secondary-button" disabled={loading || !setting.recipientEmail || !setting.deliveryConfigured} onClick={onSend}>{loading ? 'Preparing…' : 'Send test report'}</button></section>{!setting.deliveryConfigured && <div className="holiday-banner report-warning"><span>!</span><div><b>Email provider setup required</b><small>Add RESEND_API_KEY and REPORT_FROM_EMAIL in Vercel before enabling delivery.</small></div></div>}<div className="report-settings-grid"><section className="panel report-config"><div className="panel-heading"><div><h3>Delivery settings</h3><p>Only administrators can change the weekly HR recipient.</p></div></div><form onSubmit={onSave} className="modal-form" key={`${setting.recipientEmail}-${setting.enabled}`}><label>HR email address<input name="recipientEmail" type="email" defaultValue={setting.recipientEmail} placeholder="hr@yourcompany.co.za" required /></label><label className="report-toggle"><input name="enabled" type="checkbox" defaultChecked={setting.enabled} /><span><b>Send automatically every Monday</b><small>07:00 South African time · previous complete week</small></span></label><button className="primary-button" disabled={loading}>{loading ? 'Saving…' : 'Save report schedule'}</button></form><div className="report-includes"><b>Automatic reporting</b><span>✓ Daily 08:00 late/absent email to hr@pits.co.za</span><span>✓ Branch-by-branch weekly summary</span><span>✓ Worked, ordinary and overtime hours</span><span>✓ Public-holiday overtime-category hours</span><span>✓ Late arrivals and missing clock-outs</span><span>✓ Absence, annual leave and sick leave</span><span>✓ Detailed CSV attachment for every employee</span></div></section><section className="panel report-history"><div className="panel-heading"><div><h3>Delivery history</h3><p>Most recent scheduled and test reports</p></div></div>{runs.length ? runs.map((run) => <article className="report-run" key={`${run.week_start}-${run.created_at}`}><span className={`leave-status ${run.status === 'sent' ? 'approved' : run.status === 'failed' ? 'rejected' : 'pending'}`}>{run.status}</span><div><b>{run.week_start} → {run.week_end}</b><small>{run.recipient_email}</small>{run.error_message && <p>{run.error_message}</p>}</div><time>{new Date(run.completed_at ?? run.created_at).toLocaleString('en-ZA', { timeZone: TIMEZONE, dateStyle: 'medium', timeStyle: 'short' })}</time></article>) : <EmptyState title="No reports sent yet" note="Save the HR address, then send a test report." />}</section></div><p className="rules-note">The CSV is suitable for Excel. Overtime is recognised only after scheduled weekly hours are complete; the first two Saturdays worked each month remain ordinary time.</p></div>;
+function displayReportMinutes(minutes: number) {
+  const safeMinutes = Math.max(0, Math.round(minutes));
+  return `${Math.floor(safeMinutes / 60)}h ${String(safeMinutes % 60).padStart(2, '0')}m`;
+}
+
+function ReportHoursRow({ label, values, className = '' }: { label: string; values: ReportMinutes; className?: string }) {
+  return <div className={`management-report-row ${className}`}><span>{label}</span><span>{displayReportMinutes(values.normalMinutes)}</span><span>{displayReportMinutes(values.overtimeOneHalfMinutes)}</span><span>{displayReportMinutes(values.overtimeDoubleMinutes)}</span><span>{displayReportMinutes(values.totalOvertimeMinutes)}</span></div>;
+}
+
+function WeeklyReports({ setting, runs, preview, loading, onSave, onPreview, onSend }: { setting: ReportSetting; runs: ReportRun[]; preview: ReportPreview | null; loading: boolean; onSave: (event: FormEvent<HTMLFormElement>) => void; onPreview: () => void; onSend: () => void }) {
+  return <div className="single-page">
+    <section className="section-intro">
+      <div><p className="eyebrow">WEEKLY MANAGEMENT REPORTING</p><h2>Consolidated month-to-date hours</h2><p>Every Monday at 08:05, HR receives totals from the 25th of the previous month through the previous completed day.</p></div>
+      <div className="report-actions"><button className="secondary-button" disabled={loading} onClick={onPreview}>{loading ? 'Preparing…' : 'Generate preview'}</button><button className="primary-button" disabled={loading || !setting.deliveryConfigured} onClick={onSend}>{loading ? 'Preparing…' : 'Send report now'}</button></div>
+    </section>
+    {!setting.deliveryConfigured && <div className="holiday-banner report-warning"><span>!</span><div><b>Email provider setup required</b><small>Add RESEND_API_KEY and REPORT_FROM_EMAIL in Vercel before enabling delivery.</small></div></div>}
+    <div className="report-settings-grid">
+      <section className="panel report-config">
+        <div className="panel-heading"><div><h3>Delivery settings</h3><p>Only administrators can manage this report.</p></div></div>
+        <form onSubmit={onSave} className="modal-form" key={`${setting.recipientEmail}-${setting.enabled}`}>
+          <label>HR email address<input name="recipientEmail" type="email" value="hr@pits.co.za" readOnly /></label>
+          <label className="report-toggle"><input name="enabled" type="checkbox" defaultChecked={setting.enabled} /><span><b>Send automatically every Monday</b><small>08:05 Africa/Johannesburg · payroll month to date</small></span></label>
+          <button className="primary-button" disabled={loading}>{loading ? 'Saving…' : 'Save report schedule'}</button>
+        </form>
+        <div className="report-includes"><b>Report contents</b><span>✓ Employee name only</span><span>✓ Normal working hours</span><span>✓ Overtime at 1.5× and 2×</span><span>✓ Branch subtotals and company total</span><span>✓ Matching Excel-compatible CSV</span><span>✓ Daily 08:00 late/absent email remains unchanged</span></div>
+      </section>
+      <section className="panel report-history">
+        <div className="panel-heading"><div><h3>Delivery history</h3><p>Most recent scheduled and manual reports</p></div></div>
+        {runs.length ? runs.map((run) => <article className="report-run" key={`${run.report_date}-${run.created_at}`}><span className={`leave-status ${run.status === 'sent' ? 'approved' : run.status === 'failed' ? 'rejected' : 'pending'}`}>{run.status}</span><div><b>{run.period_start} → {run.period_end}</b><small>{run.recipient_email} · {run.trigger}</small>{run.error_message && <p>{run.error_message}</p>}</div><time>{new Date(run.completed_at ?? run.created_at).toLocaleString('en-ZA', { timeZone: TIMEZONE, dateStyle: 'medium', timeStyle: 'short' })}</time></article>) : <EmptyState title="No reports sent yet" note="Generate a preview, or send the first report when ready." />}
+      </section>
+    </div>
+    {preview && <section className="panel management-preview">
+      <div className="panel-heading"><div><h3>Report preview</h3><p>{preview.periodStart} to {preview.periodEnd} · {preview.recipient}</p></div></div>
+      <div className="management-report-table">
+        <div className="management-report-head"><span>Employee name</span><span>Normal MTD</span><span>Overtime 1.5×</span><span>Overtime 2×</span><span>Total overtime</span></div>
+        {preview.branches.map((branch) => <div key={branch.branchId}><h4>{branch.branchName}</h4>{branch.employees.map((employee) => <ReportHoursRow key={employee.employeeId} label={employee.employeeName} values={employee} />)}<ReportHoursRow className="subtotal" label={`${branch.branchName} subtotal`} values={{ ...branch.subtotal, totalOvertimeMinutes: branch.totalOvertimeMinutes }} /></div>)}
+        <ReportHoursRow className="company-total" label="Company-wide total" values={preview.companyTotal} />
+      </div>
+    </section>}
+    <p className="rules-note">Calculations use whole minutes. Overlapping records are merged, normal scheduled hours are allocated first, and only the first two Saturdays worked per employee each month are normal time. Missing weekday lunch records deduct 60 minutes; missing Saturday break records deduct 30 minutes.</p>
+  </div>;
 }
 
 function Administrators({ members, stores, currentUserId, loading, onInvite, onChange, onRemove }: { members: AdministratorMember[]; stores: Store[]; currentUserId: string; loading: boolean; onInvite: () => void; onChange: (userId: string, action: 'suspend' | 'restore') => void; onRemove: (userId: string) => void }) {

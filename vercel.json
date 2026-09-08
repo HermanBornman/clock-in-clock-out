@@ -4,7 +4,11 @@
   "crons": [
     {
       "path": "/api/cron/weekly-hr-report",
-      "schedule": "0 5 * * 1"
+      "schedule": "5 6 * * 1"
+    },
+    {
+      "path": "/api/cron/weekly-hr-report-retry",
+      "schedule": "20 6 * * 1"
     },
     {
       "path": "/api/cron/daily-attendance-alert",
