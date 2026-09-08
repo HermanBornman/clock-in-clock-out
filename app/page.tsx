@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient as createSupabaseClient, isSupabaseConfigured } from '@/lib/supabase/client';
+import { calculateAttendanceHours, timeToMinute, type HoursBreakdown, type WorkScheduleInput } from '@/lib/attendance/calculation';
 
 type View = 'overview' | 'clock' | 'attendance' | 'leave' | 'staff' | 'stores' | 'reports' | 'administrators';
 type Store = { id: string; name: string; location: string; code: string; active: boolean };
@@ -12,11 +13,12 @@ type Person = { id: string; name: string; role: string; storeId: string; pin: st
 type RecordItem = { id: string; employeeId: string; storeId: string; date: string; inTime: string; outTime?: string; status: 'On time' | 'Late' | 'Complete'; hours?: number };
 type LeaveRequest = { id: string; staffId: string; storeId: string; type: 'annual' | 'sick'; startDate: string; endDate: string; reason: string; status: 'pending' | 'approved' | 'rejected'; managerNote?: string; createdAt: string };
 type PublicHoliday = { date: string; name: string; observed: boolean };
-type HoursBreakdown = { worked: number; ordinary: number; overtime: number; publicHoliday: number };
 type AdministratorMember = { userId: string; email: string; role: 'admin' | 'manager'; active: boolean; pending: boolean; invitedAt: string; acceptedAt: string | null; storeIds: string[] };
 type ReportRun = { week_start: string; week_end: string; recipient_email: string; status: 'sending' | 'sent' | 'failed'; error_message: string | null; completed_at: string | null; created_at: string };
 type ReportSetting = { recipientEmail: string; enabled: boolean; updatedAt: string | null; deliveryConfigured: boolean };
 type SyncMode = 'demo' | 'connecting' | 'cloud' | 'error';
+
+const TIMEZONE = 'Africa/Johannesburg';
 
 const initialStores: Store[] = [
   { id: 'rosebank', name: 'Rosebank', location: 'Johannesburg', code: 'RBK', active: true },
@@ -37,7 +39,7 @@ const initialPeople: Person[] = [
   { id: 'sibusiso', name: 'Sibusiso Zulu', role: 'Store manager', storeId: 'menlyn', pin: '3058', active: true, clockedIn: true, clockIn: '07:46' },
 ];
 
-const today = new Date().toLocaleDateString('en-CA');
+const today = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 const initialRecords: RecordItem[] = [
   { id: 'r1', employeeId: 'thandi', storeId: 'rosebank', date: today, inTime: '07:42', status: 'On time' },
   { id: 'r2', employeeId: 'liam', storeId: 'rosebank', date: today, inTime: '07:55', status: 'On time' },
@@ -67,33 +69,24 @@ const demoHolidays: PublicHoliday[] = [
   { date: '2026-12-26', name: 'Day of Goodwill', observed: false },
 ];
 
+const workSchedules: WorkScheduleInput[] = [
+  ...[1, 2, 3, 4, 5].map((dayOfWeek) => ({ dayOfWeek, opensAtMinute: 7 * 60 + 30, closesAtMinute: 17 * 60, unpaidBreakMinutes: 60 })),
+  { dayOfWeek: 6, opensAtMinute: 8 * 60, closesAtMinute: 13 * 60, unpaidBreakMinutes: 0 },
+  { dayOfWeek: 7, opensAtMinute: null, closesAtMinute: null, unpaidBreakMinutes: 0 },
+];
+
 const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase();
 const tones = ['plum', 'blue', 'gold', 'green'];
-const formatDate = (value: Date) => value.toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' });
+const formatDate = (value: Date) => value.toLocaleDateString('en-ZA', { timeZone: TIMEZONE, weekday: 'long', day: 'numeric', month: 'long' });
 
 function calculateHours(records: RecordItem[], holidays: PublicHoliday[]) {
-  const result = new Map<string, HoursBreakdown>();
-  const holidayDates = new Set(holidays.map((holiday) => holiday.date));
-  const weeklyOrdinary = new Map<string, number>();
-  const completed = records.filter((record) => record.hours !== undefined).slice().sort((a, b) => `${a.date}${a.inTime}`.localeCompare(`${b.date}${b.inTime}`));
-  for (const record of completed) {
-    const date = new Date(`${record.date}T12:00:00`);
-    const day = date.getDay();
-    const gross = record.hours ?? 0;
-    const worked = Math.max(0, Math.round((gross - (day >= 1 && day <= 5 && gross > 5 ? 1 : 0)) * 10) / 10);
-    if (holidayDates.has(record.date)) {
-      result.set(record.id, { worked, ordinary: 0, overtime: 0, publicHoliday: worked });
-      continue;
-    }
-    const monday = new Date(date); monday.setDate(date.getDate() - ((day + 6) % 7));
-    const weekKey = `${record.employeeId}-${monday.toLocaleDateString('en-CA')}`;
-    const used = weeklyOrdinary.get(weekKey) ?? 0;
-    const ordinary = Math.max(0, Math.min(worked, 45 - used));
-    const overtime = Math.max(0, Math.round((worked - ordinary) * 10) / 10);
-    weeklyOrdinary.set(weekKey, used + ordinary);
-    result.set(record.id, { worked, ordinary: Math.round(ordinary * 10) / 10, overtime, publicHoliday: 0 });
-  }
-  return result;
+  return calculateAttendanceHours(records.map((record) => ({
+    id: record.id,
+    staffId: record.employeeId,
+    date: record.date,
+    clockInMinute: timeToMinute(record.inTime) ?? 0,
+    clockOutMinute: timeToMinute(record.outTime ?? null),
+  })), workSchedules, holidays.map((holiday) => holiday.date));
 }
 
 export default function Home() {
@@ -153,7 +146,7 @@ export default function Home() {
       ]);
       if (storeResult.error || staffResult.error || attendanceResult.error || leaveResult.error || holidayResult.error) { setSyncMode('error'); setHydrated(true); return; }
 
-      const cloudRecords: RecordItem[] = (attendanceResult.data ?? []).map((row) => ({ id: row.id, employeeId: row.staff_id, storeId: row.store_id, date: row.work_date, inTime: new Date(row.clock_in).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', hour12: false }), outTime: row.clock_out ? new Date(row.clock_out).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', hour12: false }) : undefined, status: row.status, hours: row.clock_out ? Math.round(((new Date(row.clock_out).getTime() - new Date(row.clock_in).getTime()) / 3600000) * 10) / 10 : undefined }));
+      const cloudRecords: RecordItem[] = (attendanceResult.data ?? []).map((row) => ({ id: row.id, employeeId: row.staff_id, storeId: row.store_id, date: row.work_date, inTime: new Date(row.clock_in).toLocaleTimeString('en-ZA', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }), outTime: row.clock_out ? new Date(row.clock_out).toLocaleTimeString('en-ZA', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }) : undefined, status: row.status, hours: row.clock_out ? Math.round(((new Date(row.clock_out).getTime() - new Date(row.clock_in).getTime()) / 3600000) * 10) / 10 : undefined }));
       const openShifts = new Map(cloudRecords.filter((record) => !record.outTime).map((record) => [record.employeeId, record]));
       const cloudStores: Store[] = (storeResult.data ?? []).map((row) => ({ id: row.id, name: row.name, location: row.location, code: row.code, active: row.active }));
       const cloudPeople: Person[] = (staffResult.data ?? []).map((row) => ({ id: row.id, name: row.name, role: row.role, storeId: row.store_id, pin: `00${row.pin_last_two ?? '00'}`, active: row.active, clockedIn: openShifts.has(row.id), clockIn: openShifts.get(row.id)?.inTime }));
@@ -202,7 +195,7 @@ export default function Home() {
     setStores((current) => [...current, store]); setModal(null); setToast(`${name} is ready for staff.`);
   }
   async function clockAction() {
-    if (!activeEmployee) return; const time = now.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (!activeEmployee) return; const time = now.toLocaleTimeString('en-ZA', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false });
     if (activeEmployee.clockedIn) {
       const openLocalRecord = records.find((record) => record.employeeId === activeEmployee.id && !record.outTime);
       const [startHour, startMinute] = (openLocalRecord?.inTime ?? time).split(':').map(Number);
@@ -456,11 +449,11 @@ function LeaveAndHours({ requests, people, stores, holidays, hoursByRecord, onDe
   const pending = requests.filter((request) => request.status === 'pending');
   const overtime = Array.from(hoursByRecord.values()).reduce((sum, item) => sum + item.overtime, 0);
   const upcoming = holidays.filter((holiday) => holiday.date >= today).slice(0, 4);
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>No scheduled meal break</small></article><article className="rule-card highlight"><span>ORDINARY LIMIT</span><b>45 hours/week</b><small>Hours above this are flagged as overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Across loaded attendance records</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Hours are classified for review, not used to calculate salary. Store operating hours and individual employee rosters remain separate.</p></div>;
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">WORK RULES &amp; LEAVE</p><h2>Hours and staff leave</h2><p>Review overtime, leave requests, and South African public holidays.</p></div><Link className="secondary-button link-button" href="/leave">Open staff leave page ↗</Link></section><section className="rules-grid"><article className="rule-card"><span>MON–FRI</span><b>07:30–17:00</b><small>60-minute unpaid meal break · 17:30 OT threshold</small></article><article className="rule-card"><span>SATURDAY</span><b>08:00–13:00</b><small>First two Saturdays worked each month are ordinary</small></article><article className="rule-card highlight"><span>WEEKLY OVERTIME</span><b>After scheduled hours</b><small>Daily shortfalls are completed before overtime</small></article><article className="rule-card"><span>OVERTIME RECORDED</span><b>{overtime.toFixed(1)} hours</b><small>Public-holiday hours are shown separately</small></article></section><div className="leave-layout"><section className="panel"><div className="panel-heading"><div><h3>Leave requests</h3><p>{pending.length} awaiting a decision</p></div></div><div className="leave-list">{requests.length ? requests.map((request) => { const person = people.find((item) => item.id === request.staffId); const store = stores.find((item) => item.id === request.storeId); return <article className="leave-request" key={request.id}><span className={`leave-type ${request.type}`}>{request.type === 'annual' ? '☀' : '+'}</span><div><b>{person?.name ?? 'Staff member'}</b><small>{request.type === 'annual' ? 'Holiday / annual leave' : 'Sick leave'} · {store?.name}</small><p>{request.startDate === request.endDate ? request.startDate : `${request.startDate} → ${request.endDate}`}{request.reason ? ` · ${request.reason}` : ''}</p></div><span className={`leave-status ${request.status}`}>{request.status}</span>{request.status === 'pending' && <div className="leave-actions"><button onClick={() => onDecision(request.id, 'rejected')}>Decline</button><button onClick={() => onDecision(request.id, 'approved')}>Approve</button></div>}</article>; }) : <EmptyState title="No leave requests" note="Staff requests submitted from the public leave page will appear here." />}</div></section><aside className="panel holiday-list"><div className="panel-heading"><div><h3>Upcoming public holidays</h3><p>Official South African calendar</p></div></div>{upcoming.map((holiday) => <div className="holiday-row" key={holiday.date}><time>{new Date(`${holiday.date}T12:00:00`).toLocaleDateString('en-ZA', { timeZone: TIMEZONE, day: '2-digit', month: 'short' })}</time><span><b>{holiday.name}</b><small>{holiday.observed ? 'Observed public holiday' : 'Public holiday'}</small></span></div>)}</aside></div><p className="rules-note">Time before 07:30 is excluded. If no lunch clock-out is recorded, the full one-hour unpaid break is deducted automatically.</p></div>;
 }
 
 function WeeklyReports({ setting, runs, loading, onSave, onSend }: { setting: ReportSetting; runs: ReportRun[]; loading: boolean; onSave: (event: FormEvent<HTMLFormElement>) => void; onSend: () => void }) {
-  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">AUTOMATED HR REPORTING</p><h2>Weekly all-branch report</h2><p>Every Monday at 07:00, HR receives the previous Monday–Sunday attendance report.</p></div><button className="secondary-button" disabled={loading || !setting.recipientEmail || !setting.deliveryConfigured} onClick={onSend}>{loading ? 'Preparing…' : 'Send test report'}</button></section>{!setting.deliveryConfigured && <div className="holiday-banner report-warning"><span>!</span><div><b>Email provider setup required</b><small>Add RESEND_API_KEY and REPORT_FROM_EMAIL in Vercel before enabling delivery.</small></div></div>}<div className="report-settings-grid"><section className="panel report-config"><div className="panel-heading"><div><h3>Delivery settings</h3><p>Only administrators can change the HR recipient.</p></div></div><form onSubmit={onSave} className="modal-form" key={`${setting.recipientEmail}-${setting.enabled}`}><label>HR email address<input name="recipientEmail" type="email" defaultValue={setting.recipientEmail} placeholder="hr@yourcompany.co.za" required /></label><label className="report-toggle"><input name="enabled" type="checkbox" defaultChecked={setting.enabled} /><span><b>Send automatically every Monday</b><small>07:00 South African time · previous complete week</small></span></label><button className="primary-button" disabled={loading}>{loading ? 'Saving…' : 'Save report schedule'}</button></form><div className="report-includes"><b>Every report includes</b><span>✓ Branch-by-branch summary</span><span>✓ Worked, ordinary and overtime hours</span><span>✓ Public-holiday hours</span><span>✓ Late arrivals and missing clock-outs</span><span>✓ Absence, annual leave and sick leave</span><span>✓ Detailed CSV attachment for every employee</span></div></section><section className="panel report-history"><div className="panel-heading"><div><h3>Delivery history</h3><p>Most recent scheduled and test reports</p></div></div>{runs.length ? runs.map((run) => <article className="report-run" key={`${run.week_start}-${run.created_at}`}><span className={`leave-status ${run.status === 'sent' ? 'approved' : run.status === 'failed' ? 'rejected' : 'pending'}`}>{run.status}</span><div><b>{run.week_start} → {run.week_end}</b><small>{run.recipient_email}</small>{run.error_message && <p>{run.error_message}</p>}</div><time>{new Date(run.completed_at ?? run.created_at).toLocaleString('en-ZA', { dateStyle: 'medium', timeStyle: 'short' })}</time></article>) : <EmptyState title="No reports sent yet" note="Save the HR address, then send a test report." />}</section></div><p className="rules-note">The CSV is suitable for Excel. Overtime classifications follow the 45-hour weekly limit and exclude the configured unpaid meal break.</p></div>;
+  return <div className="single-page"><section className="section-intro"><div><p className="eyebrow">AUTOMATED HR REPORTING</p><h2>Weekly all-branch report</h2><p>Every Monday at 07:00, HR receives the previous Monday–Sunday attendance report.</p></div><button className="secondary-button" disabled={loading || !setting.recipientEmail || !setting.deliveryConfigured} onClick={onSend}>{loading ? 'Preparing…' : 'Send test report'}</button></section>{!setting.deliveryConfigured && <div className="holiday-banner report-warning"><span>!</span><div><b>Email provider setup required</b><small>Add RESEND_API_KEY and REPORT_FROM_EMAIL in Vercel before enabling delivery.</small></div></div>}<div className="report-settings-grid"><section className="panel report-config"><div className="panel-heading"><div><h3>Delivery settings</h3><p>Only administrators can change the weekly HR recipient.</p></div></div><form onSubmit={onSave} className="modal-form" key={`${setting.recipientEmail}-${setting.enabled}`}><label>HR email address<input name="recipientEmail" type="email" defaultValue={setting.recipientEmail} placeholder="hr@yourcompany.co.za" required /></label><label className="report-toggle"><input name="enabled" type="checkbox" defaultChecked={setting.enabled} /><span><b>Send automatically every Monday</b><small>07:00 South African time · previous complete week</small></span></label><button className="primary-button" disabled={loading}>{loading ? 'Saving…' : 'Save report schedule'}</button></form><div className="report-includes"><b>Automatic reporting</b><span>✓ Daily 08:00 late/absent email to hr@pits.co.za</span><span>✓ Branch-by-branch weekly summary</span><span>✓ Worked, ordinary and overtime hours</span><span>✓ Public-holiday overtime-category hours</span><span>✓ Late arrivals and missing clock-outs</span><span>✓ Absence, annual leave and sick leave</span><span>✓ Detailed CSV attachment for every employee</span></div></section><section className="panel report-history"><div className="panel-heading"><div><h3>Delivery history</h3><p>Most recent scheduled and test reports</p></div></div>{runs.length ? runs.map((run) => <article className="report-run" key={`${run.week_start}-${run.created_at}`}><span className={`leave-status ${run.status === 'sent' ? 'approved' : run.status === 'failed' ? 'rejected' : 'pending'}`}>{run.status}</span><div><b>{run.week_start} → {run.week_end}</b><small>{run.recipient_email}</small>{run.error_message && <p>{run.error_message}</p>}</div><time>{new Date(run.completed_at ?? run.created_at).toLocaleString('en-ZA', { timeZone: TIMEZONE, dateStyle: 'medium', timeStyle: 'short' })}</time></article>) : <EmptyState title="No reports sent yet" note="Save the HR address, then send a test report." />}</section></div><p className="rules-note">The CSV is suitable for Excel. Overtime is recognised only after scheduled weekly hours are complete; the first two Saturdays worked each month remain ordinary time.</p></div>;
 }
 
 function Administrators({ members, stores, currentUserId, loading, onInvite, onChange, onRemove }: { members: AdministratorMember[]; stores: Store[]; currentUserId: string; loading: boolean; onInvite: () => void; onChange: (userId: string, action: 'suspend' | 'restore') => void; onRemove: (userId: string) => void }) {

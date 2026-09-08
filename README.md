@@ -37,4 +37,6 @@ Import this repository in Vercel or run `vercel`. The included configuration use
 
 With Supabase values configured, all stores, staff and attendance records use the protected shared database. Without them, Presently remains usable as a browser-only demo and clearly labels that mode in the interface.
 
-The configured store hours are 07:30–17:00 Monday–Friday and 08:00–13:00 Saturday. A 60-minute unpaid weekday meal break and a 45-hour ordinary weekly limit are used for hour classification. The current migration seeds the official 2026 South African public-holiday calendar.
+The configured store hours are 07:30–17:00 Monday–Friday and 08:00–13:00 Saturday in `Africa/Johannesburg`. Clock-ins before 07:30 do not add work time, and weekday clock-outs from 17:00 through 17:30 remain a full ordinary day without overtime. The system enforces a 60-minute unpaid weekday meal break, including when staff omit lunch clock events. The first two Saturdays actually worked by each employee in a calendar month are ordinary scheduled days. Later Saturdays and after-hours work become overtime only after that employee's scheduled weekly hours are complete. Public-holiday work is classified separately as overtime-category time.
+
+At 08:00 every weekday, a secured Vercel cron sends one consolidated late and absent/not-clocked-in email to `HR_ATTENDANCE_EMAIL` (default `hr@pits.co.za`). Approved leave and South African public holidays are excluded, and a database run record prevents duplicate delivery.
