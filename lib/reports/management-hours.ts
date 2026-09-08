@@ -1,18 +1,13 @@
 import 'server-only';
 
-import { calculateConsolidatedMinutes, formatMinutes, managementReportPeriod, type ConsolidatedMinutes } from '@/lib/attendance/consolidated';
-import { timeToMinute, type WorkScheduleInput } from '@/lib/attendance/calculation';
+import { formatMinutes, managementReportPeriod, type ConsolidatedMinutes } from '@/lib/attendance/consolidated';
+import { addDays } from '@/lib/attendance/reporting';
+import { buildAttendanceReport } from '@/lib/reports/attendance-report';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export const MANAGEMENT_REPORT_RECIPIENT = 'hr@pits.co.za';
 export const MANAGEMENT_REPORT_TYPE = 'weekly_management_mtd_hours';
 const TIMEZONE = 'Africa/Johannesburg';
-
-type Store = { id: string; name: string };
-type Staff = { id: string; store_id: string; name: string; active: boolean };
-type Attendance = { id: string; staff_id: string; work_date: string; clock_in: string; clock_out: string | null };
-type Schedule = { day_of_week: number; opens_at: string | null; closes_at: string | null; unpaid_break_minutes: number };
-type Holiday = { holiday_date: string };
 
 export type ManagementEmployeeRow = ConsolidatedMinutes & {
   employeeId: string;
@@ -39,18 +34,6 @@ export type ManagementHoursReport = {
 
 export function reportPeriod(reference = new Date()) {
   return managementReportPeriod(reference, TIMEZONE);
-}
-
-function localDate(value: string) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
-}
-
-function localMinute(value: string, workDate: string) {
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(value));
-  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
-  const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
-  const dayOffset = Math.round((new Date(`${localDate(value)}T12:00:00Z`).getTime() - new Date(`${workDate}T12:00:00Z`).getTime()) / 86_400_000);
-  return dayOffset * 24 * 60 + hour * 60 + minute;
 }
 
 function sumMinutes(rows: ConsolidatedMinutes[]): ConsolidatedMinutes {
@@ -102,48 +85,18 @@ function renderReport(organizationName: string, reportDate: string, periodStart:
 export async function buildManagementHoursReport(organizationId: string, period = reportPeriod()): Promise<ManagementHoursReport> {
   const admin = createAdminClient();
   if (!admin) throw new Error('Supabase administration is not configured.');
-  const classificationStart = `${period.periodStart.slice(0, 7)}-01`;
-  const [orgResult, storesResult, staffResult, attendanceResult, scheduleResult, holidayResult] = await Promise.all([
-    admin.from('organizations').select('name').eq('id', organizationId).single(),
-    admin.from('stores').select('id, name').eq('organization_id', organizationId).order('name'),
-    admin.from('staff').select('id, store_id, name, active').eq('organization_id', organizationId).is('archived_at', null).order('name'),
-    admin.from('attendance').select('id, staff_id, work_date, clock_in, clock_out').eq('organization_id', organizationId).gte('work_date', classificationStart).lte('work_date', period.periodEnd).order('work_date').order('clock_in'),
-    admin.from('work_schedule').select('day_of_week, opens_at, closes_at, unpaid_break_minutes').eq('organization_id', organizationId),
-    admin.from('public_holidays').select('holiday_date').gte('holiday_date', classificationStart).lte('holiday_date', period.periodEnd),
-  ]);
-  const firstError = [orgResult, storesResult, staffResult, attendanceResult, scheduleResult, holidayResult].find((result) => result.error)?.error;
-  if (firstError) throw new Error(firstError.message);
-  if (!orgResult.data) throw new Error('Organisation not found.');
-
-  const stores = (storesResult.data ?? []) as Store[];
-  const staff = (staffResult.data ?? []) as Staff[];
-  const attendance = (attendanceResult.data ?? []) as Attendance[];
-  const schedules: WorkScheduleInput[] = ((scheduleResult.data ?? []) as Schedule[]).map((schedule) => ({
-    dayOfWeek: schedule.day_of_week,
-    opensAtMinute: timeToMinute(schedule.opens_at),
-    closesAtMinute: timeToMinute(schedule.closes_at),
-    unpaidBreakMinutes: schedule.unpaid_break_minutes,
-  }));
-  const minutes = calculateConsolidatedMinutes(attendance.map((record) => ({
-    id: record.id,
-    staffId: record.staff_id,
-    date: record.work_date,
-    clockInMinute: localMinute(record.clock_in, record.work_date),
-    clockOutMinute: record.clock_out ? localMinute(record.clock_out, record.work_date) : null,
-  })), schedules, ((holidayResult.data ?? []) as Holiday[]).map((holiday) => holiday.holiday_date), period.periodStart, period.periodEnd);
-
-  const includedStaff = staff.filter((employee) => employee.active || attendance.some((record) => record.staff_id === employee.id && record.work_date >= period.periodStart));
-  const branches = stores.map((store) => {
-    const employees = includedStaff.filter((employee) => employee.store_id === store.id).map((employee) => ({
-      employeeId: employee.id,
-      employeeName: employee.name,
-      ...(minutes.get(employee.id) ?? { normalMinutes: 0, overtimeOneHalfMinutes: 0, overtimeDoubleMinutes: 0 }),
-    }));
-    return { branchId: store.id, branchName: store.name, employees, subtotal: sumMinutes(employees) };
-  }).filter((branch) => branch.employees.length > 0);
+  const { data: storeRows, error: storeError } = await admin.from('stores').select('id').eq('organization_id', organizationId);
+  if (storeError) throw new Error(storeError.message);
+  const allowedBranchIds = (storeRows ?? []).map((row) => String(row.id));
+  const referenceDate = new Date(`${addDays(period.reportDate, 1)}T10:00:00Z`);
+  const shared = await buildAttendanceReport({ admin, userId: '', organizationId, role: 'admin', allowedBranchIds }, { preset: 'custom', start: period.periodStart, end: period.periodEnd, page: 1, pageSize: 200 }, referenceDate);
+  const branches = shared.branchSubtotals.map((branch) => {
+    const employees = shared.summary.filter((employee) => employee.branchId === branch.branchId).map((employee) => ({ employeeId: employee.employeeId, employeeName: employee.employeeName, normalMinutes: employee.normalMinutes, overtimeOneHalfMinutes: employee.overtimeOneHalfMinutes, overtimeDoubleMinutes: employee.overtimeDoubleMinutes }));
+    return { branchId: branch.branchId, branchName: branch.branchName, employees, subtotal: sumMinutes(employees) };
+  });
   const companyTotal = sumMinutes(branches.map((branch) => branch.subtotal));
-  const rendered = renderReport(String(orgResult.data.name), period.reportDate, period.periodStart, period.periodEnd, branches, companyTotal);
-  return { organizationName: String(orgResult.data.name), ...period, branches, companyTotal, ...rendered };
+  const rendered = renderReport(shared.organizationName, period.reportDate, period.periodStart, period.periodEnd, branches, companyTotal);
+  return { organizationName: shared.organizationName, ...period, branches, companyTotal, ...rendered };
 }
 
 export async function sendManagementHoursReport(organizationId: string, trigger: 'scheduled' | 'manual', period = reportPeriod()) {
