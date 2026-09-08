@@ -40,7 +40,8 @@ export async function sendDailyAttendanceAlert(reference = new Date()) {
   if (holiday) return { skipped: true, reason: 'public-holiday', reportDate };
 
   const recipient = process.env.HR_ATTENDANCE_EMAIL?.trim().toLowerCase() || DEFAULT_RECIPIENT;
-  const { data: existing } = await admin.from('daily_attendance_alert_runs').select('status').eq('report_date', reportDate).eq('recipient_email', recipient).maybeSingle();
+  const { data: existing, error: auditReadError } = await admin.from('daily_attendance_alert_runs').select('status').eq('report_date', reportDate).eq('recipient_email', recipient).maybeSingle();
+  const auditAvailable = !auditReadError;
   if (existing?.status === 'sent') return { skipped: true, reason: 'already-sent', reportDate };
 
   const [organizationsResult, storesResult, staffResult, attendanceResult, leaveResult] = await Promise.all([
@@ -77,8 +78,10 @@ export async function sendDailyAttendanceAlert(reference = new Date()) {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   if (!apiKey) throw new Error('Email delivery is not configured. Add RESEND_API_KEY in Vercel.');
   const run = { report_date: reportDate, recipient_email: recipient, status: 'sending', late_count: status.late.length, absent_count: status.absent.length, error_message: null, completed_at: null };
-  const { error: runError } = await admin.from('daily_attendance_alert_runs').upsert(run, { onConflict: 'report_date,recipient_email' });
-  if (runError) throw new Error(runError.message);
+  if (auditAvailable) {
+    const { error: runError } = await admin.from('daily_attendance_alert_runs').upsert(run, { onConflict: 'report_date,recipient_email' });
+    if (runError) throw new Error(runError.message);
+  }
 
   const from = process.env.REPORT_FROM_EMAIL?.trim() || 'Presently Reports <onboarding@resend.dev>';
   const response = await fetch('https://api.resend.com/emails', {
@@ -89,9 +92,9 @@ export async function sendDailyAttendanceAlert(reference = new Date()) {
   const payload = await response.json().catch(() => ({})) as { id?: string; message?: string; error?: { message?: string } };
   if (!response.ok) {
     const message = payload.message ?? payload.error?.message ?? `Email provider returned ${response.status}.`;
-    await admin.from('daily_attendance_alert_runs').update({ status: 'failed', error_message: message, completed_at: new Date().toISOString() }).eq('report_date', reportDate).eq('recipient_email', recipient);
+    if (auditAvailable) await admin.from('daily_attendance_alert_runs').update({ status: 'failed', error_message: message, completed_at: new Date().toISOString() }).eq('report_date', reportDate).eq('recipient_email', recipient);
     throw new Error(message);
   }
-  await admin.from('daily_attendance_alert_runs').update({ status: 'sent', provider_message_id: payload.id ?? null, error_message: null, completed_at: new Date().toISOString() }).eq('report_date', reportDate).eq('recipient_email', recipient);
+  if (auditAvailable) await admin.from('daily_attendance_alert_runs').update({ status: 'sent', provider_message_id: payload.id ?? null, error_message: null, completed_at: new Date().toISOString() }).eq('report_date', reportDate).eq('recipient_email', recipient);
   return { skipped: false, reportDate, late: status.late.length, absent: status.absent.length, messageId: payload.id };
 }
