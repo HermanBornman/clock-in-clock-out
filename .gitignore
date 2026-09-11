@@ -38,4 +38,5 @@ next-env.d.ts
 /outputs/
 /work/
 /.tmp-staff-inspect/
+/upload/
 *.tsbuildinfo
