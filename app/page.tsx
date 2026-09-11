@@ -1389,22 +1389,42 @@ export default function Home() {
     }
   }
   async function decideLeave(id: string, status: "approved" | "rejected") {
+    if (currentRole !== "admin") {
+      setToast("Only authorised administrators may decide leave requests.");
+      return;
+    }
     if (syncMode === "cloud" && supabase) {
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ status, decided_at: new Date().toISOString() })
-        .eq("id", id);
-      if (error) {
-        setToast(`Could not update request: ${error.message}`);
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        setToast("Your session has expired. Please sign in again.");
         return;
       }
+      const response = await fetch("/api/leave-requests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ requestId: id, status }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setToast(`Could not update request: ${payload.error ?? "Please try again."}`);
+        return;
+      }
+      const delivery = payload.smsSent && payload.emailSent
+        ? " Staff notified by SMS and email."
+        : payload.smsSent
+          ? " SMS sent, but the email could not be delivered."
+          : payload.emailSent
+            ? " Email sent, but the SMS could not be delivered."
+            : " Decision saved, but neither notification could be delivered.";
+      setToast(`${payload.message}${delivery}`);
     }
     setLeaveRequests((current) =>
       current.map((request) =>
         request.id === id ? { ...request, status } : request,
       ),
     );
-    setToast(`Leave request ${status}.`);
+    if (syncMode !== "cloud") setToast(`Leave request ${status}.`);
   }
   function exportCsv() {
     const lines = [
@@ -1653,6 +1673,7 @@ export default function Home() {
             stores={stores}
             holidays={holidays}
             hoursByRecord={hoursByRecord}
+            canDecide={currentRole === "admin"}
             onDecision={decideLeave}
           />
         )}
@@ -2610,6 +2631,7 @@ function LeaveAndHours({
   stores,
   holidays,
   hoursByRecord,
+  canDecide,
   onDecision,
 }: {
   requests: LeaveRequest[];
@@ -2617,6 +2639,7 @@ function LeaveAndHours({
   stores: Store[];
   holidays: PublicHoliday[];
   hoursByRecord: Map<string, HoursBreakdown>;
+  canDecide: boolean;
   onDecision: (id: string, status: "approved" | "rejected") => void;
 }) {
   const pending = requests.filter((request) => request.status === "pending");
@@ -2670,7 +2693,7 @@ function LeaveAndHours({
           <div className="panel-heading">
             <div>
               <h3>Leave requests</h3>
-              <p>{pending.length} awaiting a decision</p>
+              <p>{pending.length} awaiting a decision{!canDecide ? " · administrator approval required" : ""}</p>
             </div>
           </div>
           <div className="leave-list">
@@ -2705,7 +2728,7 @@ function LeaveAndHours({
                     <span className={`leave-status ${request.status}`}>
                       {request.status}
                     </span>
-                    {request.status === "pending" && (
+                    {request.status === "pending" && canDecide && (
                       <div className="leave-actions">
                         <button
                           onClick={() => onDecision(request.id, "rejected")}

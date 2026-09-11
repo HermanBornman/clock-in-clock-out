@@ -13,7 +13,7 @@ type DirectoryRow = {
   staff_role: string;
 };
 
-type LeaveResult = { success: boolean; message: string; request_id: string | null };
+type LeaveResult = { success: boolean; message: string; requestId: string | null; smsSent: boolean };
 
 export default function StaffLeavePage() {
   const [supabase] = useState<SupabaseClient | null>(() => createClient());
@@ -48,19 +48,19 @@ export default function StaffLeavePage() {
     event.preventDefault();
     if (!supabase || !selectedStaff || pin.length !== 4) return;
     setBusy(true); setMessage('');
-    const { data, error } = await supabase.rpc('staff_submit_leave', {
-      p_staff_id: selectedStaff.staff_id,
-      p_pin: pin,
-      p_leave_type: leaveType,
-      p_start_date: startDate,
-      p_end_date: endDate,
-      p_reason: reason,
+    const response = await fetch('/api/leave-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ staffId: selectedStaff.staff_id, pin, leaveType, startDate, endDate, reason }),
     });
+    const data = await response.json().catch(() => null) as LeaveResult | { error?: string } | null;
     setBusy(false); setPin('');
-    if (error) { setMessage('Your request could not be sent. Please try again.'); return; }
-    const response = (data?.[0] ?? null) as LeaveResult | null;
-    if (!response?.success) { setMessage(response?.message ?? 'Your request could not be sent.'); return; }
-    setMessage(response.message); setComplete(true);
+    if (!response.ok || !data || !('success' in data) || !data.success) {
+      const errorMessage = data && 'error' in data ? data.error : data && 'message' in data ? data.message : undefined;
+      setMessage(errorMessage ?? 'Your request could not be sent.');
+      return;
+    }
+    setMessage(`${data.message}${data.smsSent ? ' HR was notified by SMS.' : ' The request was saved, but the HR SMS could not be delivered.'}`); setComplete(true);
   }
 
   function reset() {

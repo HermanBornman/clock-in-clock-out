@@ -8,6 +8,7 @@ A mobile-friendly, multi-store attendance application. It includes:
 - Daily attendance records with CSV export
 - Ordinary, overtime and public-holiday hour classification
 - PIN-protected holiday and sick-leave requests at `/leave`
+- SMS notification to HR for new leave requests; staff receive SMS and email after administrator approval or rejection
 - Administrator leave approval and South African work-rule overview
 - A live administrator dashboard
 - Secure administrator sign-in and organisation onboarding
