@@ -1251,7 +1251,7 @@ export default function Home() {
   }
   async function changeAdministrator(
     userId: string,
-    action: "suspend" | "restore",
+    action: "suspend" | "restore" | "resend",
   ) {
     try {
       const payload = await administratorFetch("", {
@@ -3036,7 +3036,10 @@ function Administrators({
   currentUserId: string;
   loading: boolean;
   onInvite: () => void;
-  onChange: (userId: string, action: "suspend" | "restore") => void;
+  onChange: (
+    userId: string,
+    action: "suspend" | "restore" | "resend",
+  ) => void;
   onRemove: (userId: string) => void;
 }) {
   const activeAdmins = members.filter(
@@ -3127,6 +3130,11 @@ function Administrators({
                   </small>
                 </div>
                 <div className="admin-actions">
+                  {member.pending && !isCurrent && (
+                    <button onClick={() => onChange(member.userId, "resend")}>
+                      Resend invite
+                    </button>
+                  )}
                   {!isCurrent && (
                     <button
                       onClick={() =>

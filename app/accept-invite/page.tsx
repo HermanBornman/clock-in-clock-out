@@ -11,6 +11,11 @@ export default function AcceptInvitePage() {
   const [message, setMessage] = useState(isSupabaseConfigured() ? '' : 'Cloud access is not configured.');
 
   useEffect(() => {
+    const linkError = new URLSearchParams(window.location.search).get('error');
+    if (linkError) {
+      queueMicrotask(() => setMessage(linkError));
+      return;
+    }
     const supabase = createClient();
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {

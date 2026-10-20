@@ -11,8 +11,24 @@ const inviteSchema = z.object({
 
 const changeSchema = z.object({
   userId: z.string().uuid(),
-  action: z.enum(['suspend', 'restore']),
+  action: z.enum(['suspend', 'restore', 'resend']),
 });
+
+function invitationRedirect(request: Request) {
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  const redirectOrigin = configuredUrl || new URL(request.url).origin;
+  // Admin invitations use Supabase's implicit session redirect, so the browser
+  // must receive the URL fragment directly instead of passing through a server route.
+  return `${redirectOrigin.replace(/\/$/, '')}/accept-invite`;
+}
+
+async function resendInvitation(admin: NonNullable<ReturnType<typeof createAdminClient>>, email: string, request: Request) {
+  return admin.auth.resend({
+    type: 'signup',
+    email,
+    options: { emailRedirectTo: invitationRedirect(request) },
+  });
+}
 
 async function authorize(request: Request) {
   const admin = createAdminClient();
@@ -76,10 +92,8 @@ export async function POST(request: Request) {
   let invitedUser = usersPage.users.find((candidate) => candidate.email?.toLowerCase() === email);
   let invitationSent = false;
   if (!invitedUser) {
-    const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-    const redirectOrigin = configuredUrl || new URL(request.url).origin;
     const { data, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${redirectOrigin}/auth/callback?next=/accept-invite`,
+      redirectTo: invitationRedirect(request),
     });
     if (inviteError || !data.user) return Response.json({ error: inviteError?.message ?? 'The invitation could not be sent.' }, { status: 400 });
     invitedUser = data.user;
@@ -101,6 +115,15 @@ export async function POST(request: Request) {
   });
   if (membershipError) return Response.json({ error: membershipError.message }, { status: 500 });
 
+  if (!invitationSent && !invitedUser.last_sign_in_at) {
+    const { error: resendError } = await resendInvitation(admin, email, request);
+    if (resendError) {
+      await admin.from('memberships').delete().eq('organization_id', organizationId).eq('user_id', invitedUser.id);
+      return Response.json({ error: `Access was not added because the invitation email failed: ${resendError.message}` }, { status: 400 });
+    }
+    invitationSent = true;
+  }
+
   if (role === 'manager') {
     const { error: assignmentError } = await admin.from('membership_stores').insert(storeIds.map((storeId) => ({ organization_id: organizationId, user_id: invitedUser.id, store_id: storeId })));
     if (assignmentError) {
@@ -119,6 +142,21 @@ export async function PATCH(request: Request) {
   const { admin, organizationId, user } = auth;
   const { userId, action } = parsed.data;
   if (userId === user.id && action === 'suspend') return Response.json({ error: 'You cannot suspend your own access.' }, { status: 400 });
+
+  if (action === 'resend') {
+    const { data: target } = await admin.from('memberships').select('user_id').eq('organization_id', organizationId).eq('user_id', userId).maybeSingle();
+    if (!target) return Response.json({ error: 'Member not found.' }, { status: 404 });
+    const { data: userData, error: userError } = await admin.auth.admin.getUserById(userId);
+    const targetUser = userData.user;
+    if (userError || !targetUser?.email) return Response.json({ error: 'The invitation email address could not be found.' }, { status: 404 });
+    if (targetUser.last_sign_in_at) return Response.json({ error: 'This person has already accepted the invitation.' }, { status: 400 });
+    const { error: resendError } = await resendInvitation(admin, targetUser.email, request);
+    if (resendError) return Response.json({ error: resendError.message }, { status: 400 });
+    const now = new Date().toISOString();
+    const { error: updateError } = await admin.from('memberships').update({ invited_at: now, invited_by: user.id }).eq('organization_id', organizationId).eq('user_id', userId);
+    if (updateError) return Response.json({ error: updateError.message }, { status: 500 });
+    return Response.json({ message: `A new invitation was sent to ${targetUser.email}. The previous link is no longer valid.` });
+  }
 
   if (action === 'suspend') {
     const { data: target } = await admin.from('memberships').select('role, active').eq('organization_id', organizationId).eq('user_id', userId).maybeSingle();

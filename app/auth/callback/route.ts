@@ -5,11 +5,17 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
   const next = requestUrl.searchParams.get('next') ?? '/';
+  const nextPath = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  const destination = new URL(nextPath, requestUrl.origin);
 
   if (code) {
     const supabase = await createClient();
-    await supabase?.auth.exchangeCodeForSession(code);
+    const { error } = await supabase?.auth.exchangeCodeForSession(code) ?? { error: new Error('Cloud access is not configured.') };
+    if (!error) return NextResponse.redirect(destination);
+    destination.searchParams.set('error', 'This email link is invalid or has expired. Ask an administrator to resend the invitation.');
+    return NextResponse.redirect(destination);
   }
 
-  return NextResponse.redirect(new URL(next.startsWith('/') ? next : '/', requestUrl.origin));
+  destination.searchParams.set('error', 'This email link is incomplete. Ask an administrator to resend the invitation.');
+  return NextResponse.redirect(destination);
 }
