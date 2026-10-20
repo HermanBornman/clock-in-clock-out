@@ -83,6 +83,14 @@ type LeaveRequest = {
   managerNote?: string;
   createdAt: string;
 };
+type LeaveUpsertInput = {
+  requestId?: string;
+  staffId: string;
+  leaveType: LeaveType;
+  startDate: string;
+  endDate: string;
+  reason: string;
+};
 type PublicHoliday = { date: string; name: string; observed: boolean };
 type AdministratorMember = {
   userId: string;
@@ -1427,6 +1435,64 @@ export default function Home() {
     );
     if (syncMode !== "cloud") setToast(`Leave request ${status}.`);
   }
+  async function saveLeave(input: LeaveUpsertInput) {
+    if (currentRole !== "admin") {
+      setToast("Only authorised administrators may record or edit leave.");
+      return false;
+    }
+    if (syncMode === "cloud" && supabase) {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        setToast("Your session has expired. Please sign in again.");
+        return false;
+      }
+      const response = await fetch("/api/leave-requests", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(input),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setToast(`Could not save leave: ${payload.error ?? "Please try again."}`);
+        return false;
+      }
+      const saved = payload.leaveRequest as LeaveRequest;
+      setLeaveRequests((current) => {
+        const exists = current.some((request) => request.id === saved.id);
+        return exists
+          ? current.map((request) => (request.id === saved.id ? saved : request))
+          : [saved, ...current];
+      });
+      setToast(`${payload.message} Attendance and reports now use the updated leave.`);
+      return true;
+    }
+
+    const person = people.find((item) => item.id === input.staffId);
+    if (!person) {
+      setToast("Select a staff member.");
+      return false;
+    }
+    const saved: LeaveRequest = {
+      id: input.requestId ?? `leave-${Date.now()}`,
+      staffId: input.staffId,
+      storeId: person.storeId,
+      type: input.leaveType,
+      startDate: input.startDate,
+      endDate: input.endDate,
+      reason: input.reason.trim(),
+      status: "approved",
+      createdAt: new Date().toISOString(),
+    };
+    setLeaveRequests((current) => {
+      const exists = current.some((request) => request.id === saved.id);
+      return exists
+        ? current.map((request) => (request.id === saved.id ? saved : request))
+        : [saved, ...current];
+    });
+    setToast(input.requestId ? "Leave entry updated." : "Past leave recorded and approved.");
+    return true;
+  }
   function exportCsv() {
     const lines = [
       [
@@ -1676,6 +1742,7 @@ export default function Home() {
             hoursByRecord={hoursByRecord}
             canDecide={currentRole === "admin"}
             onDecision={decideLeave}
+            onSave={saveLeave}
           />
         )}
         {view === "staff" && (
@@ -2634,6 +2701,7 @@ function LeaveAndHours({
   hoursByRecord,
   canDecide,
   onDecision,
+  onSave,
 }: {
   requests: LeaveRequest[];
   people: Person[];
@@ -2642,7 +2710,10 @@ function LeaveAndHours({
   hoursByRecord: Map<string, HoursBreakdown>;
   canDecide: boolean;
   onDecision: (id: string, status: "approved" | "rejected") => void;
+  onSave: (input: LeaveUpsertInput) => Promise<boolean>;
 }) {
+  const [editing, setEditing] = useState<LeaveRequest | "new" | null>(null);
+  const [saving, setSaving] = useState(false);
   const pending = requests.filter((request) => request.status === "pending");
   const overtime = Array.from(hoursByRecord.values()).reduce(
     (sum, item) => sum + item.overtime,
@@ -2696,6 +2767,11 @@ function LeaveAndHours({
               <h3>Leave requests</h3>
               <p>{pending.length} awaiting a decision{!canDecide ? " · administrator approval required" : ""}</p>
             </div>
+            {canDecide && (
+              <button className="primary-button" onClick={() => setEditing("new")}>
+                + Record leave
+              </button>
+            )}
           </div>
           <div className="leave-list">
             {requests.length ? (
@@ -2729,6 +2805,7 @@ function LeaveAndHours({
                     </span>
                     {request.status === "pending" && canDecide && (
                       <div className="leave-actions">
+                        <button onClick={() => setEditing(request)}>Edit</button>
                         <button
                           onClick={() => onDecision(request.id, "rejected")}
                         >
@@ -2739,6 +2816,11 @@ function LeaveAndHours({
                         >
                           Approve
                         </button>
+                      </div>
+                    )}
+                    {canDecide && request.status !== "pending" && (
+                      <div className="leave-actions">
+                        <button onClick={() => setEditing(request)}>Edit</button>
                       </div>
                     )}
                   </article>
@@ -2779,6 +2861,72 @@ function LeaveAndHours({
           ))}
         </aside>
       </div>
+      {editing && (
+        <Modal
+          title={editing === "new" ? "Record leave already taken" : "Update leave entry"}
+          description="The saved entry is approved immediately and is used by attendance summaries and exported reports."
+          onClose={() => !saving && setEditing(null)}
+        >
+          <form
+            className="modal-form leave-editor-form"
+            key={editing === "new" ? "new" : editing.id}
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
+              setSaving(true);
+              const saved = await onSave({
+                requestId: editing === "new" ? undefined : editing.id,
+                staffId: String(form.get("staffId") ?? ""),
+                leaveType: String(form.get("leaveType") ?? "annual") as LeaveType,
+                startDate: String(form.get("startDate") ?? ""),
+                endDate: String(form.get("endDate") ?? ""),
+                reason: String(form.get("reason") ?? ""),
+              });
+              setSaving(false);
+              if (saved) setEditing(null);
+            }}
+          >
+            <label>
+              Employee
+              <select name="staffId" defaultValue={editing === "new" ? "" : editing.staffId} required>
+                <option value="" disabled>Select an employee</option>
+                {[...people]
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.name} · {stores.find((store) => store.id === person.storeId)?.name ?? "No branch"}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Leave type
+              <select name="leaveType" defaultValue={editing === "new" ? "annual" : editing.type} required>
+                <option value="annual">Annual leave</option>
+                <option value="sick">Sick leave</option>
+                <option value="family_responsibility">Family responsibility leave</option>
+              </select>
+            </label>
+            <label>
+              From date
+              <input name="startDate" type="date" defaultValue={editing === "new" ? today : editing.startDate} required />
+            </label>
+            <label>
+              To date
+              <input name="endDate" type="date" defaultValue={editing === "new" ? today : editing.endDate} required />
+            </label>
+            <label className="leave-editor-notes">
+              Reason or notes
+              <textarea name="reason" maxLength={500} rows={4} defaultValue={editing === "new" ? "" : editing.reason} placeholder="Optional supporting details" />
+            </label>
+            <p className="form-note">Saving approves the entry immediately. Any overlapping pending or approved leave will be rejected.</p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setEditing(null)} disabled={saving}>Cancel</button>
+              <button type="submit" className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save approved leave"}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
       <p className="rules-note">
         Time before 07:30 is excluded. If no lunch clock-out is recorded, the
         full one-hour unpaid break is deducted automatically.
