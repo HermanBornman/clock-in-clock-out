@@ -1,3 +1,5 @@
+import type { LeaveType } from '@/lib/leave/types';
+
 export type ReportingSchedule = {
   dayOfWeek: number;
   opensAtMinute: number | null;
@@ -28,10 +30,14 @@ export type ReportingRecord = {
 };
 
 export type ReportingLeave = {
+  id: string;
   staffId: string;
+  branchId: string;
+  branchName: string;
   startDate: string;
   endDate: string;
-  type: 'annual' | 'sick';
+  type: LeaveType;
+  reason: string;
   status: string;
 };
 
@@ -48,6 +54,7 @@ export type AttendanceStatus =
   | 'Absent'
   | 'Annual leave'
   | 'Sick leave'
+  | 'Family responsibility leave'
   | 'Public holiday'
   | 'Not scheduled'
   | 'Not clocked in';
@@ -300,6 +307,7 @@ function statusFor(row: Pick<DailyAttendanceRow, 'flags'>, leave: ReportingLeave
   if (row.flags.early) return 'Early departure';
   if (leave?.type === 'annual') return 'Annual leave';
   if (leave?.type === 'sick') return 'Sick leave';
+  if (leave?.type === 'family_responsibility') return 'Family responsibility leave';
   if (holiday && !row.flags.overtime) return 'Public holiday';
   if (row.flags.absent) return date === today ? 'Not clocked in' : 'Absent';
   if (!scheduled && !row.flags.overtime && !row.flags.adjusted) return 'Not scheduled';

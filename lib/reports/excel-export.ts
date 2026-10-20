@@ -66,12 +66,6 @@ function addDailyRow(sheet: ExcelJS.Worksheet, row: DailyAttendanceRow) {
   else if (row.flags.late || row.flags.early || row.flags.overtime) excelRow.font = { color: { argb: ORANGE } };
 }
 
-function absenceReason(status: DailyAttendanceRow['status']) {
-  if (status === 'Annual leave') return 'Annual leave';
-  if (status === 'Sick leave') return 'Sick leave';
-  return 'Absent (no approved leave)';
-}
-
 export async function createAttendanceWorkbook(report: AttendanceReport) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Presently Attendance';
@@ -92,17 +86,16 @@ export async function createAttendanceWorkbook(report: AttendanceReport) {
 
   const absence = workbook.addWorksheet('Absence & Leave');
   titleRows(absence, report, branchFilter, workbook.created);
-  absence.addRow(['Date', 'Day', 'Employee name', 'Branch', 'Reason', 'Notes']);
-  const absenceRows = report.allDailyRows
-    .filter((row) => row.status === 'Absent' || row.status === 'Annual leave' || row.status === 'Sick leave')
-    .sort((a, b) => a.date.localeCompare(b.date) || a.branchName.localeCompare(b.branchName) || a.employeeName.localeCompare(b.employeeName));
-  for (const item of absenceRows) {
-    const row = absence.addRow([excelDate(item.date), item.dayOfWeek, item.employeeName, item.branchName, absenceReason(item.status), item.notes]);
-    row.getCell(1).numFmt = 'yyyy-mm-dd';
-    if (item.status === 'Absent') row.font = { color: { argb: RED } };
+  absence.addRow(['Days', 'Employee name', 'Leave reason', 'Branch', 'From date', 'To date', 'Notes']);
+  for (const item of report.absenceAndLeave) {
+    const row = absence.addRow([item.days, item.employeeName, item.reason, item.branchName, excelDate(item.fromDate), excelDate(item.toDate), item.notes]);
+    row.getCell(1).numFmt = '0';
+    row.getCell(5).numFmt = 'yyyy-mm-dd';
+    row.getCell(6).numFmt = 'yyyy-mm-dd';
+    if (item.unapprovedAbsence) row.font = { color: { argb: RED } };
   }
-  absence.columns = [{ width: 13 }, { width: 12 }, { width: 30 }, { width: 22 }, { width: 28 }, { width: 42 }];
-  finishSheet(absence, 6, 6);
+  absence.columns = [{ width: 10 }, { width: 30 }, { width: 30 }, { width: 22 }, { width: 13 }, { width: 13 }, { width: 42 }];
+  finishSheet(absence, 6, 7);
 
   const daily = workbook.addWorksheet('Daily Attendance Detail');
   titleRows(daily, report, branchFilter, workbook.created);

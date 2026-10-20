@@ -14,6 +14,8 @@ import {
   type ReportingSchedule,
 } from '@/lib/attendance/reporting';
 import { timeToMinute } from '@/lib/attendance/calculation';
+import type { LeaveType } from '@/lib/leave/types';
+import { buildAbsenceAndLeaveRows } from '@/lib/reports/absence-leave';
 import type { ReportAuthorization } from '@/lib/reports/authorization';
 
 const TIMEZONE = 'Africa/Johannesburg';
@@ -66,13 +68,14 @@ export async function buildAttendanceReport(auth: ReportAuthorization, request: 
     admin.from('attendance').select('id, staff_id, store_id, work_date, clock_in, clock_out, record_source, adjustment_reason').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).gte('work_date', lookback).lte('work_date', period.end).order('work_date').order('clock_in'),
     admin.from('work_schedule').select('day_of_week, opens_at, closes_at, unpaid_break_minutes').eq('organization_id', auth.organizationId),
     admin.from('public_holidays').select('holiday_date, name').gte('holiday_date', lookback).lte('holiday_date', period.end),
-    admin.from('leave_requests').select('staff_id, start_date, end_date, leave_type, status').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).lte('start_date', period.end).gte('end_date', lookback),
+    admin.from('leave_requests').select('id, staff_id, store_id, start_date, end_date, leave_type, reason, status').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).lte('start_date', period.end).gte('end_date', lookback),
   ]);
   const firstError = [organizationResult, storesResult, staffResult, attendanceResult, scheduleResult, holidayResult, leaveResult].find((result) => result.error)?.error;
   if (firstError) throw new Error(firstError.message);
   const stores = new Map((storesResult.data ?? []).map((row) => [String(row.id), String(row.name)]));
   const rawAttendance = attendanceResult.data ?? [];
-  const employees: ReportingEmployee[] = (staffResult.data ?? []).filter((row) => row.active || rawAttendance.some((record) => record.staff_id === row.id && record.work_date >= period.start)).map((row) => ({
+  const rawLeave = leaveResult.data ?? [];
+  const employees: ReportingEmployee[] = (staffResult.data ?? []).filter((row) => row.active || rawAttendance.some((record) => record.staff_id === row.id && record.work_date >= period.start) || rawLeave.some((leave) => leave.staff_id === row.id && leave.status === 'approved')).map((row) => ({
     id: String(row.id), name: String(row.name), branchId: String(row.store_id), branchName: stores.get(String(row.store_id)) ?? 'Unknown branch', active: Boolean(row.active), employmentStartDate: localDate(String(row.created_at)), employmentEndDate: row.archived_at ? localDate(String(row.archived_at)) : null,
   }));
   const employeeIds = new Set(employees.map((employee) => employee.id));
@@ -81,9 +84,10 @@ export async function buildAttendanceReport(auth: ReportAuthorization, request: 
     id: String(row.id), staffId: String(row.staff_id), branchId: String(row.store_id), date: String(row.work_date), clockInMinute: localMinute(row.clock_in as string | null, String(row.work_date)), clockOutMinute: localMinute(row.clock_out as string | null, String(row.work_date)), source: row.record_source === 'administrator_adjustment' ? 'administrator_adjustment' : 'employee_clocking', adjustmentReason: row.adjustment_reason ? String(row.adjustment_reason) : null,
   }));
   const schedules: ReportingSchedule[] = (scheduleResult.data ?? []).map((row) => ({ dayOfWeek: Number(row.day_of_week), opensAtMinute: timeToMinute(row.opens_at as string | null), closesAtMinute: timeToMinute(row.closes_at as string | null), unpaidBreakMinutes: Number(row.unpaid_break_minutes) }));
-  const leave: ReportingLeave[] = (leaveResult.data ?? []).map((row) => ({ staffId: String(row.staff_id), startDate: String(row.start_date), endDate: String(row.end_date), type: row.leave_type === 'sick' ? 'sick' : 'annual', status: String(row.status) }));
+  const leave: ReportingLeave[] = rawLeave.map((row) => ({ id: String(row.id), staffId: String(row.staff_id), branchId: String(row.store_id), branchName: stores.get(String(row.store_id)) ?? 'Unknown branch', startDate: String(row.start_date), endDate: String(row.end_date), type: row.leave_type as LeaveType, reason: String(row.reason ?? ''), status: String(row.status) }));
   const filters: ReportFilters = { branchIds: selectedBranches, employeeId: request.employeeId, search: request.search, statuses: request.statuses, hasNormalHours: request.hasNormalHours, hasOvertime: request.hasOvertime, missingClockIn: request.missingClockIn, missingClockOut: request.missingClockOut, late: request.late, early: request.early, absent: request.absent, incomplete: request.incomplete };
   const report = calculateAttendanceReport({ employees, records, schedules, publicHolidayDates: (holidayResult.data ?? []).map((row) => String(row.holiday_date)), leave, reportStart: period.start, reportEnd: period.end, today: period.today, filters });
+  const absenceAndLeave = buildAbsenceAndLeaveRows({ dailyRows: report.daily, leave, employees, reportStart: period.start, reportEnd: period.end });
   const branchSubtotals = [...new Set(report.summary.map((row) => row.branchId))].map((branchId) => {
     const rows = report.summary.filter((row) => row.branchId === branchId);
     return { branchId, branchName: rows[0]?.branchName ?? stores.get(branchId) ?? 'Unknown branch', ...sumSummary(rows) };
@@ -110,6 +114,7 @@ export async function buildAttendanceReport(auth: ReportAuthorization, request: 
     patterns: report.patterns,
     trends: report.trends,
     exceptions: report.daily.filter((row) => row.flags.absent || row.flags.incomplete || row.flags.late || row.flags.early || row.flags.adjusted),
+    absenceAndLeave,
     allDailyRows: report.daily,
   };
 }

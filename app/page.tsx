@@ -20,6 +20,7 @@ import {
   maskIdentifier,
   normalizeStaffPrivateDetails,
 } from "@/lib/staff/details";
+import { leaveTypeLabel, type LeaveType } from "@/lib/leave/types";
 
 type View =
   | "overview"
@@ -74,7 +75,7 @@ type LeaveRequest = {
   id: string;
   staffId: string;
   storeId: string;
-  type: "annual" | "sick";
+  type: LeaveType;
   startDate: string;
   endDate: string;
   reason: string;
@@ -2708,14 +2709,12 @@ function LeaveAndHours({
                 return (
                   <article className="leave-request" key={request.id}>
                     <span className={`leave-type ${request.type}`}>
-                      {request.type === "annual" ? "☀" : "+"}
+                      {request.type === "annual" ? "☀" : request.type === "sick" ? "+" : "F"}
                     </span>
                     <div>
                       <b>{person?.name ?? "Staff member"}</b>
                       <small>
-                        {request.type === "annual"
-                          ? "Holiday / annual leave"
-                          : "Sick leave"}{" "}
+                        {leaveTypeLabel(request.type)}{" "}
                         · {store?.name}
                       </small>
                       <p>

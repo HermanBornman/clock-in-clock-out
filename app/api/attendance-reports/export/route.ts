@@ -13,7 +13,7 @@ const schema = z.object({
   branchIds: z.array(z.string().uuid()).max(100).optional(),
   employeeId: z.string().uuid().optional(),
   search: z.string().max(100).optional(),
-  statuses: z.array(z.enum(['Complete','Late','Early departure','Late and early departure','Missing clock-in','Missing clock-out','Incomplete','Absent','Annual leave','Sick leave','Public holiday','Not scheduled','Not clocked in'])).max(20).optional(),
+  statuses: z.array(z.enum(['Complete','Late','Early departure','Late and early departure','Missing clock-in','Missing clock-out','Incomplete','Absent','Annual leave','Sick leave','Family responsibility leave','Public holiday','Not scheduled','Not clocked in'])).max(20).optional(),
   hasNormalHours: z.boolean().optional(), hasOvertime: z.boolean().optional(), missingClockIn: z.boolean().optional(), missingClockOut: z.boolean().optional(), late: z.boolean().optional(), early: z.boolean().optional(), absent: z.boolean().optional(), incomplete: z.boolean().optional(),
 });
 

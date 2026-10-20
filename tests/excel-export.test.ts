@@ -21,6 +21,11 @@ test('creates six filtered worksheets including absence reasons and Excel durati
     daily: [], dailyTotal: 0, page: 1, pageSize: 50, pageCount: 1,
     summary: [summary], branchSubtotals: [{ branchId: 'branch', branchName: 'Branch One', daysLoggedInCount: 5, normalMinutes: 3000, overtimeOneHalfMinutes: 120, overtimeDoubleMinutes: 60, totalOvertimeMinutes: 180, totalWorkedMinutes: 3180, lateArrivalCount: 1, absenceCount: 0, incompleteRecordCount: 0 }],
     companyTotal: { daysLoggedInCount: 5, normalMinutes: 3000, overtimeOneHalfMinutes: 120, overtimeDoubleMinutes: 60, totalOvertimeMinutes: 180, totalWorkedMinutes: 3180, lateArrivalCount: 1, absenceCount: 0, incompleteRecordCount: 0 }, overtime: [], patterns: [], trends: [], exceptions: absenceRows, allDailyRows: absenceRows,
+    absenceAndLeave: [
+      { id: 'leave-1', days: 3, employeeName: 'Employee One', reason: 'Annual leave', branchName: 'Branch One', fromDate: '2026-09-01', toDate: '2026-09-03', notes: 'Family holiday', unapprovedAbsence: false },
+      { id: 'leave-2', days: 1, employeeName: 'Employee Two', reason: 'Family responsibility leave', branchName: 'Branch One', fromDate: '2026-09-04', toDate: '2026-09-04', notes: 'Family emergency', unapprovedAbsence: false },
+      { id: 'absence-1', days: 1, employeeName: 'Employee Three', reason: 'Absent (no approved leave)', branchName: 'Branch One', fromDate: '2026-09-05', toDate: '2026-09-05', notes: '', unapprovedAbsence: true },
+    ],
   };
   const buffer = await createAttendanceWorkbook(report);
   const workbook = new ExcelJS.Workbook();
@@ -40,8 +45,10 @@ test('creates six filtered worksheets including absence reasons and Excel durati
   assert.equal((sheet.getCell('D7').value as Date).toISOString(), '1900-01-01T02:00:00.000Z');
 
   const absenceSheet = workbook.getWorksheet('Absence & Leave')!;
-  assert.equal(absenceSheet.getCell('E6').value, 'Reason');
-  assert.deepEqual(['E7', 'E8', 'E9'].map((cell) => absenceSheet.getCell(cell).value), ['Absent (no approved leave)', 'Annual leave', 'Sick leave']);
-  assert.deepEqual(['A7', 'A8', 'A9'].map((cell) => (absenceSheet.getCell(cell).value as Date).toISOString().slice(0, 10)), ['2026-09-01', '2026-09-02', '2026-09-03']);
-  assert.equal(absenceSheet.autoFilter, 'A6:F9');
+  assert.deepEqual(['A6', 'B6', 'C6', 'D6', 'E6', 'F6', 'G6'].map((cell) => absenceSheet.getCell(cell).value), ['Days', 'Employee name', 'Leave reason', 'Branch', 'From date', 'To date', 'Notes']);
+  assert.deepEqual(['A7', 'A8', 'A9'].map((cell) => absenceSheet.getCell(cell).value), [3, 1, 1]);
+  assert.deepEqual(['C7', 'C8', 'C9'].map((cell) => absenceSheet.getCell(cell).value), ['Annual leave', 'Family responsibility leave', 'Absent (no approved leave)']);
+  assert.deepEqual(['E7', 'E8', 'E9'].map((cell) => (absenceSheet.getCell(cell).value as Date).toISOString().slice(0, 10)), ['2026-09-01', '2026-09-04', '2026-09-05']);
+  assert.deepEqual(['F7', 'F8', 'F9'].map((cell) => (absenceSheet.getCell(cell).value as Date).toISOString().slice(0, 10)), ['2026-09-03', '2026-09-04', '2026-09-05']);
+  assert.equal(absenceSheet.autoFilter, 'A6:G9');
 });

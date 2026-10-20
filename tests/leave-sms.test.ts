@@ -21,6 +21,7 @@ test('builds an HR leave-submission SMS without the private note', () => {
 test('builds approved and rejected staff SMS messages', () => {
   assert.match(buildStaffDecisionMessage('sick', '2026-09-20', '2026-09-20', 'approved'), /was approved/);
   assert.match(buildStaffDecisionMessage('annual', '2026-10-01', '2026-10-03', 'rejected'), /was rejected/);
+  assert.match(buildStaffDecisionMessage('family_responsibility', '2026-10-04', '2026-10-04', 'approved'), /family responsibility leave/);
 });
 
 test('builds a staff decision email and escapes employee HTML', () => {

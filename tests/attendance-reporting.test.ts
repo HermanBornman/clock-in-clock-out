@@ -37,6 +37,15 @@ test('creates complete, late, early, missing and absent daily statuses', () => {
   assert.equal(result.summary[0].daysLoggedInCount, 4);
 });
 
+test('classifies approved family responsibility leave', () => {
+  const result = calculateAttendanceReport({
+    employees: [employee], records: [], schedules, publicHolidayDates: [],
+    leave: [{ id: 'leave', staffId: 'staff', branchId: 'branch', branchName: 'Test Branch', startDate: '2026-09-07', endDate: '2026-09-08', type: 'family_responsibility', reason: 'Family emergency', status: 'approved' }],
+    reportStart: '2026-09-07', reportEnd: '2026-09-08', today: '2026-09-09',
+  });
+  assert.deepEqual(result.daily.map((row) => row.status), ['Family responsibility leave', 'Family responsibility leave']);
+});
+
 test('deducts recorded and automatic breaks without double counting', () => {
   const result = report([shift('am', '2026-09-07', 450, 720), shift('pm', '2026-09-07', 780, 1020)], '2026-09-07', '2026-09-07');
   const row = result.daily[0];

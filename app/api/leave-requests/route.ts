@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 const submissionSchema = z.object({
   staffId: z.string().uuid(),
   pin: z.string().regex(/^\d{4}$/),
-  leaveType: z.enum(['annual', 'sick']),
+  leaveType: z.enum(['annual', 'sick', 'family_responsibility']),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().max(500).default(''),

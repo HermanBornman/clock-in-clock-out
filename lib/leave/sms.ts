@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { buildHrLeaveMessage, buildStaffDecisionMessage } from '@/lib/leave/sms-content';
 import { normalizeSouthAfricanMobile } from '@/lib/notifications/sms-format';
 import { sendSms } from '@/lib/notifications/sms';
+import type { LeaveType } from '@/lib/leave/types';
 
 export { buildHrLeaveMessage, buildStaffDecisionMessage } from '@/lib/leave/sms-content';
 
@@ -13,7 +14,7 @@ type LeaveRecord = {
   organization_id: string;
   staff_id: string;
   store_id: string;
-  leave_type: 'annual' | 'sick';
+  leave_type: LeaveType;
   start_date: string;
   end_date: string;
   status: 'pending' | 'approved' | 'rejected';

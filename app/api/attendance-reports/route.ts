@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const preset = z.enum(['today', 'yesterday', 'current_week', 'previous_week', 'current_month', 'payroll_period', 'previous_month', 'custom']);
-const attendanceStatus = z.enum(['Complete','Late','Early departure','Late and early departure','Missing clock-in','Missing clock-out','Incomplete','Absent','Annual leave','Sick leave','Public holiday','Not scheduled','Not clocked in']);
+const attendanceStatus = z.enum(['Complete','Late','Early departure','Late and early departure','Missing clock-in','Missing clock-out','Incomplete','Absent','Annual leave','Sick leave','Family responsibility leave','Public holiday','Not scheduled','Not clocked in']);
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
 
 function bool(value: string | null) { return value === 'true' ? true : undefined; }
