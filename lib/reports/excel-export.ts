@@ -45,9 +45,10 @@ function finishSheet(sheet: ExcelJS.Worksheet, headerRow: number, columnCount: n
   });
 }
 
-function addSummaryRow(sheet: ExcelJS.Worksheet, label: string, branch: string, values: Pick<SummaryRow, 'normalMinutes' | 'overtimeOneHalfMinutes' | 'overtimeDoubleMinutes' | 'totalOvertimeMinutes' | 'totalWorkedMinutes' | 'lateArrivalCount' | 'absenceCount' | 'incompleteRecordCount'>, style?: 'subtotal' | 'total') {
-  const row = sheet.addRow([branch, label, duration(values.normalMinutes), duration(values.overtimeOneHalfMinutes), duration(values.overtimeDoubleMinutes), duration(values.totalOvertimeMinutes), duration(values.totalWorkedMinutes), values.lateArrivalCount, values.absenceCount, values.incompleteRecordCount]);
-  for (let column = 3; column <= 7; column += 1) row.getCell(column).numFmt = DURATION_FORMAT;
+function addSummaryRow(sheet: ExcelJS.Worksheet, label: string, branch: string, values: Pick<SummaryRow, 'daysLoggedInCount' | 'normalMinutes' | 'overtimeOneHalfMinutes' | 'overtimeDoubleMinutes' | 'totalOvertimeMinutes' | 'totalWorkedMinutes' | 'lateArrivalCount' | 'absenceCount' | 'incompleteRecordCount'>, style?: 'subtotal' | 'total') {
+  const row = sheet.addRow([branch, label, values.daysLoggedInCount, duration(values.normalMinutes), duration(values.overtimeOneHalfMinutes), duration(values.overtimeDoubleMinutes), duration(values.totalOvertimeMinutes), duration(values.totalWorkedMinutes), values.lateArrivalCount, values.absenceCount, values.incompleteRecordCount]);
+  row.getCell(3).numFmt = '0';
+  for (let column = 4; column <= 8; column += 1) row.getCell(column).numFmt = DURATION_FORMAT;
   if (style) {
     row.font = { bold: true, color: style === 'total' ? { argb: 'FFFFFF' } : { argb: NAVY } };
     row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style === 'total' ? NAVY : LIGHT_GREEN } };
@@ -74,14 +75,14 @@ export async function createAttendanceWorkbook(report: AttendanceReport) {
 
   const summary = workbook.addWorksheet('Summary');
   titleRows(summary, report, branchFilter, workbook.created);
-  summary.addRow(['Branch', 'Employee name', 'Normal working hours', 'Overtime at 1.5×', 'Overtime at 2×', 'Total overtime', 'Total hours worked', 'Late-arrival count', 'Absence count', 'Incomplete-record count']);
+  summary.addRow(['Branch', 'Employee name', 'Days logged in', 'Normal working hours', 'Overtime at 1.5×', 'Overtime at 2×', 'Total overtime', 'Total hours worked', 'Late-arrival count', 'Absence count', 'Incomplete-record count']);
   for (const branch of report.branchSubtotals) {
     for (const employee of report.summary.filter((row) => row.branchId === branch.branchId)) addSummaryRow(summary, employee.employeeName, branch.branchName, employee);
     addSummaryRow(summary, `${branch.branchName} subtotal`, branch.branchName, branch, 'subtotal');
   }
   addSummaryRow(summary, 'Company-wide total', 'All branches', report.companyTotal, 'total');
-  summary.columns = [{ width: 22 }, { width: 30 }, ...Array.from({ length: 5 }, () => ({ width: 19 })), { width: 18 }, { width: 15 }, { width: 20 }];
-  finishSheet(summary, 6, 10);
+  summary.columns = [{ width: 22 }, { width: 30 }, { width: 15 }, ...Array.from({ length: 5 }, () => ({ width: 19 })), { width: 18 }, { width: 15 }, { width: 20 }];
+  finishSheet(summary, 6, 11);
 
   const daily = workbook.addWorksheet('Daily Attendance Detail');
   titleRows(daily, report, branchFilter, workbook.created);

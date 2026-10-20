@@ -34,6 +34,7 @@ test('creates complete, late, early, missing and absent daily statuses', () => {
   assert.equal(result.daily.find((row) => row.date === '2026-09-09')?.status, 'Early departure');
   assert.equal(result.daily.find((row) => row.date === '2026-09-10')?.status, 'Missing clock-out');
   assert.equal(result.daily.find((row) => row.date === '2026-09-11')?.status, 'Missing clock-in');
+  assert.equal(result.summary[0].daysLoggedInCount, 4);
 });
 
 test('deducts recorded and automatic breaks without double counting', () => {

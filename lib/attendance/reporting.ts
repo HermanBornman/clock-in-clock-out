@@ -101,6 +101,7 @@ export type SummaryRow = {
   employeeName: string;
   branchId: string;
   branchName: string;
+  daysLoggedInCount: number;
   normalMinutes: number;
   overtimeOneHalfMinutes: number;
   overtimeDoubleMinutes: number;
@@ -458,6 +459,7 @@ export function calculateAttendanceReport(input: {
     const rows = filteredRows.filter((row) => row.employeeId === employee.id);
     return {
       employeeId: employee.id, employeeName: employee.name, branchId: employee.branchId, branchName: employee.branchName,
+      daysLoggedInCount: rows.filter((row) => row.actualClockInMinute !== null).length,
       normalMinutes: rows.reduce((sum, row) => sum + row.normalMinutes, 0),
       overtimeOneHalfMinutes: rows.reduce((sum, row) => sum + row.overtimeOneHalfMinutes, 0),
       overtimeDoubleMinutes: rows.reduce((sum, row) => sum + row.overtimeDoubleMinutes, 0),
@@ -536,6 +538,7 @@ export function applyReportFilters(rows: DailyAttendanceRow[], filters: ReportFi
 
 export function sumSummary(rows: SummaryRow[]) {
   return rows.reduce((total, row) => ({
+    daysLoggedInCount: total.daysLoggedInCount + row.daysLoggedInCount,
     normalMinutes: total.normalMinutes + row.normalMinutes,
     overtimeOneHalfMinutes: total.overtimeOneHalfMinutes + row.overtimeOneHalfMinutes,
     overtimeDoubleMinutes: total.overtimeDoubleMinutes + row.overtimeDoubleMinutes,
@@ -544,7 +547,7 @@ export function sumSummary(rows: SummaryRow[]) {
     lateArrivalCount: total.lateArrivalCount + row.lateArrivalCount,
     absenceCount: total.absenceCount + row.absenceCount,
     incompleteRecordCount: total.incompleteRecordCount + row.incompleteRecordCount,
-  }), { normalMinutes: 0, overtimeOneHalfMinutes: 0, overtimeDoubleMinutes: 0, totalOvertimeMinutes: 0, totalWorkedMinutes: 0, lateArrivalCount: 0, absenceCount: 0, incompleteRecordCount: 0 });
+  }), { daysLoggedInCount: 0, normalMinutes: 0, overtimeOneHalfMinutes: 0, overtimeDoubleMinutes: 0, totalOvertimeMinutes: 0, totalWorkedMinutes: 0, lateArrivalCount: 0, absenceCount: 0, incompleteRecordCount: 0 });
 }
 
 export function formatMinutes(minutes: number) {
