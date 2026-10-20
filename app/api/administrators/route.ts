@@ -23,6 +23,37 @@ function invitationRedirect(request: Request) {
 }
 
 async function resendInvitation(admin: NonNullable<ReturnType<typeof createAdminClient>>, email: string, request: Request) {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from = process.env.AUTH_FROM_EMAIL?.trim() || process.env.REPORT_FROM_EMAIL?.trim();
+  if (apiKey && from) {
+    const { data, error } = await admin.auth.admin.generateLink({
+      type: 'magiclink',
+      email,
+      options: { redirectTo: invitationRedirect(request) },
+    });
+    if (error) return { error };
+    const activationUrl = invitationRedirect(request);
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Presently-Attendance/1.0',
+      },
+      body: JSON.stringify({
+        from,
+        to: [email],
+        subject: 'Your Presently administrator invitation',
+        html: `<div style="font-family:Arial,sans-serif;color:#172033;line-height:1.5"><h1>Complete your Presently invitation</h1><p>Open the activation page and enter this one-time code:</p><p style="font-size:30px;font-weight:700;letter-spacing:8px">${data.properties.email_otp}</p><p><a href="${activationUrl}" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px">Open activation page</a></p><p style="color:#667085;font-size:13px">Only use the newest code. If you did not expect this invitation, you can ignore this email.</p></div>`,
+      }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { message?: string; error?: { message?: string } };
+      return { error: new Error(payload.message ?? payload.error?.message ?? `Email provider returned ${response.status}.`) };
+    }
+    return { error: null };
+  }
+
   return admin.auth.resend({
     type: 'signup',
     email,
