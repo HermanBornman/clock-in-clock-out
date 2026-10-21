@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { validatePasswordChange } from "@/lib/auth/password-change";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   createClient as createSupabaseClient,
@@ -497,6 +498,7 @@ export default function Home() {
     | "administrator"
     | "reset-pin"
     | "change-store"
+    | "change-password"
     | null
   >(null);
   const [selectedStaffActionId, setSelectedStaffActionId] = useState("");
@@ -522,6 +524,7 @@ export default function Home() {
   );
   const [currentAdministratorId, setCurrentAdministratorId] = useState("");
   const [administratorsLoading, setAdministratorsLoading] = useState(false);
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const [reportSetting, setReportSetting] = useState<ReportSetting>({
     recipientEmail: "",
     enabled: false,
@@ -1054,6 +1057,45 @@ export default function Home() {
   async function signOut() {
     await supabase?.auth.signOut();
     router.replace("/login");
+  }
+  async function changeOwnPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) {
+      setToast("Cloud access is unavailable.");
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const currentPassword = String(form.get("currentPassword") ?? "");
+    const newPassword = String(form.get("newPassword") ?? "");
+    const confirmation = String(form.get("confirmation") ?? "");
+    const validationError = validatePasswordChange(
+      currentPassword,
+      newPassword,
+      confirmation,
+    );
+    if (validationError) {
+      setToast(validationError);
+      return;
+    }
+
+    setPasswordBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        current_password: currentPassword,
+        password: newPassword,
+      });
+      if (error) throw error;
+      setModal(null);
+      setToast("Your password has been changed.");
+    } catch (error) {
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "Your password could not be changed.",
+      );
+    } finally {
+      setPasswordBusy(false);
+    }
   }
   async function staffFetch(path = "", options: RequestInit = {}) {
     if (!supabase) throw new Error("Cloud access is unavailable.");
@@ -1694,12 +1736,21 @@ export default function Home() {
               <b>{adminEmail.split("@")[0]}</b>
               <small>Administrator</small>
             </span>
-            <button
-              className="signout-button"
-              onClick={syncMode === "cloud" ? signOut : undefined}
-            >
-              {syncMode === "cloud" ? "Sign out" : "⋮"}
-            </button>
+            {syncMode === "cloud" ? (
+              <div className="profile-actions">
+                <button
+                  className="signout-button"
+                  onClick={() => setModal("change-password")}
+                >
+                  Password
+                </button>
+                <button className="signout-button" onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <button className="signout-button">⋮</button>
+            )}
           </div>
         </div>
       </aside>
@@ -1934,6 +1985,65 @@ export default function Home() {
           <span>✓</span>
           {toast}
         </div>
+      )}
+      {modal === "change-password" && (
+        <Modal
+          title="Change your password"
+          description="Confirm your current password, then choose a new private password. No email code is required."
+          onClose={() => !passwordBusy && setModal(null)}
+        >
+          <form
+            onSubmit={changeOwnPassword}
+            className="modal-form password-change-form"
+          >
+            <label>
+              Current password
+              <input
+                name="currentPassword"
+                type="password"
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            <label>
+              New password
+              <input
+                name="newPassword"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </label>
+            <label>
+              Confirm new password
+              <input
+                name="confirmation"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+            </label>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setModal(null)}
+                disabled={passwordBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={passwordBusy}
+              >
+                {passwordBusy ? "Changing…" : "Change password"}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
       {modal === "staff" && (
         <Modal
