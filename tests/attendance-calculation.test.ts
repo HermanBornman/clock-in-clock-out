@@ -43,6 +43,15 @@ test('drops daily overtime below 60 minutes', () => {
   assert.deepEqual(calculateAttendanceHours(week, schedules, []).get('fri'), { worked: 8.5, ordinary: 8.5, overtime: 0, publicHoliday: 0 });
 });
 
+test('rounds qualifying daily overtime down to 30-minute blocks', () => {
+  const week = [
+    record('mon', '2026-09-07', '07:30', '17:00'), record('tue', '2026-09-08', '07:30', '17:00'),
+    record('wed', '2026-09-09', '07:30', '17:00'), record('thu', '2026-09-10', '07:30', '17:00'),
+    record('fri', '2026-09-11', '07:30', '18:59'),
+  ];
+  assert.deepEqual(calculateAttendanceHours(week, schedules, []).get('fri'), { worked: 9.5, ordinary: 8.5, overtime: 1, publicHoliday: 0 });
+});
+
 test('uses extra time to complete missing weekly ordinary hours before overtime', () => {
   const week = [
     record('mon', '2026-09-07', '08:30', '17:00'), record('tue', '2026-09-08', '07:30', '17:00'),

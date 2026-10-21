@@ -195,8 +195,14 @@ export function calculateAttendanceHours(
   for (const day of days) {
     const overtimeTotal = day.records.reduce((sum, record) => sum + record.overtime, 0);
     const publicHolidayTotal = day.records.reduce((sum, record) => sum + record.publicHoliday, 0);
-    if (applyMinimumOvertime(overtimeTotal) === 0) day.records.forEach((record) => { record.overtime = 0; });
-    if (applyMinimumOvertime(publicHolidayTotal) === 0) day.records.forEach((record) => { record.publicHoliday = 0; });
+    let payableOvertime = applyMinimumOvertime(overtimeTotal);
+    let payablePublicHoliday = applyMinimumOvertime(publicHolidayTotal);
+    for (const record of day.records) {
+      record.overtime = Math.min(record.overtime, payableOvertime);
+      payableOvertime -= record.overtime;
+      record.publicHoliday = Math.min(record.publicHoliday, payablePublicHoliday);
+      payablePublicHoliday -= record.publicHoliday;
+    }
   }
 
   const result = new Map<string, HoursBreakdown>();

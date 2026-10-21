@@ -70,7 +70,7 @@ type RecordItem = {
   outTime?: string;
   status: "On time" | "Late" | "Complete" | "Incomplete";
   hours?: number;
-  recordSource?: "employee_clocking" | "administrator_adjustment";
+  recordSource?: "employee_clocking" | "administrator_adjustment" | "system_auto_clock_out";
   adjustmentReason?: string;
 };
 type AttendanceAdjustmentInput = {
@@ -2882,7 +2882,7 @@ function LeaveAndHours({
         <article className="rule-card highlight">
           <span>WEEKLY OVERTIME</span>
           <b>After scheduled hours</b>
-          <small>Daily shortfalls are completed first · less than 60 minutes falls away</small>
+          <small>Daily shortfalls are completed first · overtime pays in 30-minute blocks after 60 minutes</small>
         </article>
         <article className="rule-card">
           <span>OVERTIME RECORDED</span>

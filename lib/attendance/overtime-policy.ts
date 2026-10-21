@@ -1,6 +1,8 @@
 export const MINIMUM_OVERTIME_MINUTES = 60;
+export const OVERTIME_BLOCK_MINUTES = 30;
 
-/** Overtime is payable only when the daily amount reaches a full hour. */
+/** Overtime starts at one hour, then pays only complete 30-minute blocks. */
 export function applyMinimumOvertime(minutes: number) {
-  return minutes >= MINIMUM_OVERTIME_MINUTES ? minutes : 0;
+  if (minutes < MINIMUM_OVERTIME_MINUTES) return 0;
+  return Math.floor(minutes / OVERTIME_BLOCK_MINUTES) * OVERTIME_BLOCK_MINUTES;
 }

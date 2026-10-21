@@ -70,3 +70,12 @@ test('drops remaining overtime below an hour after completing weekly normal hour
   assert.equal(totals?.normalMinutes, 2550);
   assert.equal(totals?.overtimeOneHalfMinutes, 0);
 });
+
+test('rounds qualifying consolidated overtime down to 30-minute blocks', () => {
+  const records = [
+    ...['2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10'].map((date, index) => shift(`day-${index}`, date, 450, 1020)),
+    shift('fri', '2026-09-11', 450, 1139),
+  ];
+  const totals = calculateConsolidatedMinutes(records, schedules, [], '2026-09-07', '2026-09-11').get('staff');
+  assert.equal(totals?.overtimeOneHalfMinutes, 60);
+});

@@ -83,6 +83,12 @@ test('removes daily overtime below 60 minutes but retains a full hour', () => {
   const fullHour = report([...base, shift('fri', '2026-09-11', 450, 1110)], '2026-09-07', '2026-09-11');
   assert.equal(fullHour.daily.find((row) => row.date === '2026-09-11')?.totalOvertimeMinutes, 60);
   assert.equal(fullHour.overtime[0]?.qualifyingOvertimeMinutes, 60);
+
+  const partialBlock = report([...base, shift('fri', '2026-09-11', 450, 1139)], '2026-09-07', '2026-09-11');
+  assert.equal(partialBlock.daily.find((row) => row.date === '2026-09-11')?.totalOvertimeMinutes, 60);
+
+  const completeBlock = report([...base, shift('fri', '2026-09-11', 450, 1140)], '2026-09-07', '2026-09-11');
+  assert.equal(completeBlock.daily.find((row) => row.date === '2026-09-11')?.totalOvertimeMinutes, 90);
 });
 
 test('handles an overnight clock-out without negative or truncated time', () => {

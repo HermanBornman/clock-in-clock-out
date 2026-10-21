@@ -26,7 +26,7 @@ export type ReportingRecord = {
   date: string;
   clockInMinute: number | null;
   clockOutMinute: number | null;
-  source?: 'employee_clocking' | 'administrator_adjustment';
+  source?: 'employee_clocking' | 'administrator_adjustment' | 'system_auto_clock_out';
   adjustmentReason?: string | null;
 };
 
@@ -85,7 +85,7 @@ export type DailyAttendanceRow = {
   lateMinutes: number;
   earlyDepartureMinutes: number;
   status: AttendanceStatus;
-  source: 'employee_clocking' | 'administrator_adjustment' | 'system';
+  source: 'employee_clocking' | 'administrator_adjustment' | 'system_auto_clock_out' | 'system';
   notes: string;
   scheduledMinutes: number;
   scheduledDay: boolean;
@@ -376,6 +376,7 @@ export function calculateAttendanceReport(input: {
       const lateMinutes = scheduled && firstIn !== null ? Math.max(0, firstIn - open) : 0;
       const earlyDepartureMinutes = scheduled && lastOut !== null ? Math.max(0, close - lastOut) : 0;
       const adjusted = records.some((record) => record.source === 'administrator_adjustment');
+      const automaticallyClosed = records.some((record) => record.source === 'system_auto_clock_out');
       const hasAnyRecord = records.length > 0;
       const absent = scheduled && !hasAnyRecord && !leave;
       const normalMinutes = !doubleTime && regularDay ? payableCore : 0;
@@ -413,7 +414,7 @@ export function calculateAttendanceReport(input: {
         lateMinutes,
         earlyDepartureMinutes,
         status: 'Complete',
-        source: adjusted ? 'administrator_adjustment' : hasAnyRecord ? 'employee_clocking' : 'system',
+        source: adjusted ? 'administrator_adjustment' : automaticallyClosed ? 'system_auto_clock_out' : hasAnyRecord ? 'employee_clocking' : 'system',
         notes,
         scheduledMinutes: hasSchedule ? Math.max(0, close - open - (schedule?.unpaidBreakMinutes ?? 0)) : 0,
         scheduledDay: scheduled,
