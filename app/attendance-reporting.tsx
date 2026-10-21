@@ -29,7 +29,7 @@ type FilterState = {
   preset: string; start: string; end: string; branchId: string; employeeId: string; search: string; status: string; exception: string; hasNormalHours: boolean; hasOvertime: boolean;
 };
 
-const initialFilters: FilterState = { preset: 'current_month', start: '', end: '', branchId: '', employeeId: '', search: '', status: '', exception: '', hasNormalHours: false, hasOvertime: false };
+const initialFilters: FilterState = { preset: 'payroll_period', start: '', end: '', branchId: '', employeeId: '', search: '', status: '', exception: '', hasNormalHours: false, hasOvertime: false };
 
 function queryFor(filters: FilterState, page = 1) {
   const params = new URLSearchParams({ preset: filters.preset, page: String(page), pageSize: '50' });
@@ -139,9 +139,9 @@ export default function AttendanceReporting({ role, schedulePanel }: { role: 'ad
   const tabs: Array<[Tab, string]> = [['summary', 'Summary'], ['daily', 'Daily attendance'], ['overtime', 'Overtime detail'], ['patterns', 'Patterns'], ['exceptions', 'Exceptions'], ...(role === 'admin' ? [['schedule', 'Scheduled report'] as [Tab, string]] : [])];
 
   return <div className="single-page reporting-page">
-    <section className="section-intro"><div><p className="eyebrow">ATTENDANCE &amp; OVERTIME REPORTING</p><h2>Staff attendance reports</h2><p>Review daily records, overtime calculations and descriptive attendance patterns.</p></div><button className="primary-button export-excel" disabled={loading || !report} onClick={exportExcel}>↓ Export to Excel</button></section>
+    <section className="section-intro"><div><p className="eyebrow">ATTENDANCE &amp; OVERTIME REPORTING</p><h2>Staff attendance reports</h2><p>Review daily records, overtime calculations and descriptive attendance patterns.</p></div><button className="primary-button export-excel" disabled={loading || !report} onClick={exportExcel}>↓ Export payroll report</button></section>
     <form className="report-filter-panel" onSubmit={apply}>
-      <label>Period<select value={filters.preset} onChange={(event) => setFilters({ ...filters, preset: event.target.value })}><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="current_week">Current week</option><option value="previous_week">Previous week</option><option value="current_month">Current month to date</option><option value="payroll_period">Payroll period (25th)</option><option value="previous_month">Previous month</option><option value="custom">Custom dates</option></select></label>
+      <label>Period<select value={filters.preset} onChange={(event) => setFilters({ ...filters, preset: event.target.value })}><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="current_week">Current week</option><option value="previous_week">Previous week</option><option value="current_month">Current month to date</option><option value="payroll_period">Payroll period (26th–25th)</option><option value="previous_month">Previous month</option><option value="custom">Custom dates</option></select></label>
       {filters.preset === 'custom' && <><label>Start<input type="date" required value={filters.start} onChange={(event) => setFilters({ ...filters, start: event.target.value })} /></label><label>End<input type="date" required value={filters.end} onChange={(event) => setFilters({ ...filters, end: event.target.value })} /></label></>}
       <label>Branch<select value={filters.branchId} onChange={(event) => setFilters({ ...filters, branchId: event.target.value, employeeId: '' })}><option value="">All authorised branches</option>{report?.options.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
       <label>Employee<select value={filters.employeeId} onChange={(event) => setFilters({ ...filters, employeeId: event.target.value })}><option value="">All employees</option>{report?.options.employees.filter((employee) => !filters.branchId || employee.branchId === filters.branchId).map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label>

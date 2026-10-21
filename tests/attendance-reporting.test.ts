@@ -18,7 +18,8 @@ test('resolves completed period presets and excludes today from custom ranges', 
   const reference = new Date('2026-09-08T06:00:00Z');
   assert.deepEqual(resolveReportPeriod('yesterday', reference), { preset: 'yesterday', start: '2026-09-07', end: '2026-09-07', today: '2026-09-08', includesToday: false });
   assert.equal(resolveReportPeriod('custom', reference, '2026-09-01', '2026-09-08').end, '2026-09-07');
-  assert.equal(resolveReportPeriod('payroll_period', reference).start, '2026-08-25');
+  assert.equal(resolveReportPeriod('payroll_period', reference).start, '2026-08-26');
+  assert.equal(resolveReportPeriod('payroll_period', new Date('2026-09-27T06:00:00Z')).start, '2026-09-26');
 });
 
 test('creates complete, late, early, missing and absent daily statuses', () => {

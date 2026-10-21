@@ -233,7 +233,7 @@ export function resolveReportPeriod(preset: ReportPeriodPreset, reference = new 
     case 'current_week': start = currentMonday; end = yesterday; break;
     case 'previous_week': start = addDays(currentMonday, -7); end = addDays(currentMonday, -1); break;
     case 'current_month': start = monthStart(today); end = yesterday; break;
-    case 'payroll_period': start = `${previousMonth(today)}-25`; end = yesterday; break;
+    case 'payroll_period': start = `${Number(today.slice(8, 10)) > 26 ? today.slice(0, 7) : previousMonth(today)}-26`; end = yesterday; break;
     case 'previous_month': {
       const previous = `${previousMonth(today)}-01`;
       start = previous;
