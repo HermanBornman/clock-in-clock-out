@@ -35,19 +35,31 @@ export async function POST(request: Request) {
 
   const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email });
   if (error || !data.properties.email_otp) {
+    console.warn('Password recovery token generation failed.', {
+      emailHash: emailHash.slice(0, 12),
+      code: error?.code ?? 'missing_otp',
+    });
     return Response.json({ message: genericMessage });
   }
 
   const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL?.trim() || new URL(request.url).origin).replace(/\/$/, '');
   try {
-    await sendEmail({
+    const delivery = await sendEmail({
       to: email,
       subject: 'Your Presently password reset code',
       html: `<div style="font-family:Arial,sans-serif;color:#172033;line-height:1.5"><h1>Reset your Presently password</h1><p>Open the password reset page and enter this one-time code:</p><p style="font-size:30px;font-weight:700;letter-spacing:8px">${data.properties.email_otp}</p><p><a href="${siteUrl}/reset-password" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px">Open password reset page</a></p><p style="color:#667085;font-size:13px">Only use the newest code. If you did not request this change, you can ignore this email.</p></div>`,
       text: `Reset your Presently password\n\nYour one-time code is ${data.properties.email_otp}\n\nOpen ${siteUrl}/reset-password and enter the code. Only use the newest code.`,
       idempotencyKey: `password-recovery-${randomUUID()}`,
     });
-  } catch {
+    console.info('Password recovery email accepted by provider.', {
+      emailHash: emailHash.slice(0, 12),
+      messageId: delivery.messageId,
+    });
+  } catch (error) {
+    console.error('Password recovery email delivery failed.', {
+      emailHash: emailHash.slice(0, 12),
+      reason: error instanceof Error ? error.message : 'Unknown delivery error',
+    });
     return Response.json({ error: 'The reset email could not be sent. Please try again shortly.' }, { status: 503 });
   }
 
