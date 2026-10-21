@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createTemporaryPassword } from '@/lib/auth/temporary-password';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
@@ -11,7 +12,7 @@ const inviteSchema = z.object({
 
 const changeSchema = z.object({
   userId: z.string().uuid(),
-  action: z.enum(['suspend', 'restore', 'resend']),
+  action: z.enum(['suspend', 'restore', 'resend', 'reset_password']),
 });
 
 function invitationRedirect(request: Request) {
@@ -173,6 +174,28 @@ export async function PATCH(request: Request) {
   const { admin, organizationId, user } = auth;
   const { userId, action } = parsed.data;
   if (userId === user.id && action === 'suspend') return Response.json({ error: 'You cannot suspend your own access.' }, { status: 400 });
+
+  if (action === 'reset_password') {
+    const { data: target } = await admin.from('memberships')
+      .select('user_id, active')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!target) return Response.json({ error: 'Member not found.' }, { status: 404 });
+    if (!target.active) return Response.json({ error: 'Restore this person’s access before resetting their password.' }, { status: 400 });
+
+    const temporaryPassword = createTemporaryPassword();
+    const { data: targetData, error: targetError } = await admin.auth.admin.getUserById(userId);
+    if (targetError || !targetData.user?.email) return Response.json({ error: 'The administrator account could not be found.' }, { status: 404 });
+    if (!targetData.user.last_sign_in_at) return Response.json({ error: 'This person must accept their invitation before a temporary password can be issued.' }, { status: 400 });
+
+    const { error: passwordError } = await admin.auth.admin.updateUserById(userId, { password: temporaryPassword });
+    if (passwordError) return Response.json({ error: 'The temporary password could not be issued.' }, { status: 500 });
+    return Response.json({
+      message: `A temporary password was issued for ${targetData.user.email}.`,
+      temporaryPassword,
+    });
+  }
 
   if (action === 'resend') {
     const { data: target } = await admin.from('memberships').select('user_id').eq('organization_id', organizationId).eq('user_id', userId).maybeSingle();

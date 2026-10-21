@@ -1345,14 +1345,27 @@ export default function Home() {
   }
   async function changeAdministrator(
     userId: string,
-    action: "suspend" | "restore" | "resend",
+    action: "suspend" | "restore" | "resend" | "reset_password",
   ) {
+    if (
+      action === "reset_password" &&
+      !window.confirm(
+        "Issue a new temporary password? The person’s current password will stop working immediately.",
+      )
+    )
+      return;
     try {
       const payload = await administratorFetch("", {
         method: "PATCH",
         body: JSON.stringify({ userId, action }),
       });
       setToast(payload.message);
+      if (action === "reset_password" && payload.temporaryPassword) {
+        window.prompt(
+          "Copy this temporary password and give it to the administrator securely. It is shown only once:",
+          payload.temporaryPassword,
+        );
+      }
       await loadAdministrators();
     } catch (error) {
       setToast(
@@ -3338,7 +3351,7 @@ function Administrators({
   onInvite: () => void;
   onChange: (
     userId: string,
-    action: "suspend" | "restore" | "resend",
+    action: "suspend" | "restore" | "resend" | "reset_password",
   ) => void;
   onRemove: (userId: string) => void;
 }) {
@@ -3435,6 +3448,15 @@ function Administrators({
                       Resend invite
                     </button>
                   )}
+                  {!member.pending && member.active && !isCurrent && (
+                    <button
+                      onClick={() =>
+                        onChange(member.userId, "reset_password")
+                      }
+                    >
+                      Temporary password
+                    </button>
+                  )}
                   {!isCurrent && (
                     <button
                       onClick={() =>
@@ -3468,7 +3490,8 @@ function Administrators({
       </section>
       <p className="rules-note">
         The final active administrator cannot be suspended or removed. Every
-        administrator must use their own email address and login.
+        administrator must use their own email address and login. Temporary
+        passwords are shown once and should be shared privately.
       </p>
     </div>
   );
