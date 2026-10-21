@@ -70,6 +70,14 @@ type RecordItem = {
   outTime?: string;
   status: "On time" | "Late" | "Complete" | "Incomplete";
   hours?: number;
+  recordSource?: "employee_clocking" | "administrator_adjustment";
+  adjustmentReason?: string;
+};
+type AttendanceAdjustmentInput = {
+  attendanceId: string;
+  clockIn: string;
+  clockOut: string;
+  reason: string;
 };
 type LeaveRequest = {
   id: string;
@@ -419,6 +427,45 @@ function calculateHours(records: RecordItem[], holidays: PublicHoliday[]) {
   );
 }
 
+function attendanceTime(value: string | null) {
+  return value
+    ? new Date(value).toLocaleTimeString("en-ZA", {
+        timeZone: TIMEZONE,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : undefined;
+}
+
+function attendanceRecord(row: {
+  id: string;
+  staff_id: string;
+  store_id: string;
+  work_date: string;
+  clock_in: string | null;
+  clock_out: string | null;
+  status: RecordItem["status"];
+  record_source?: RecordItem["recordSource"] | null;
+  adjustment_reason?: string | null;
+}): RecordItem {
+  return {
+    id: row.id,
+    employeeId: row.staff_id,
+    storeId: row.store_id,
+    date: row.work_date,
+    inTime: attendanceTime(row.clock_in),
+    outTime: attendanceTime(row.clock_out),
+    status: row.status,
+    hours:
+      row.clock_in && row.clock_out
+        ? Math.round(((new Date(row.clock_out).getTime() - new Date(row.clock_in).getTime()) / 3600000) * 10) / 10
+        : undefined,
+    recordSource: row.record_source ?? "employee_clocking",
+    adjustmentReason: row.adjustment_reason ?? undefined,
+  };
+}
+
 export default function Home() {
   const router = useRouter();
   const cloudConfigured = isSupabaseConfigured();
@@ -582,40 +629,7 @@ export default function Home() {
         return;
       }
 
-      const cloudRecords: RecordItem[] = (attendanceResult.data ?? []).map(
-        (row) => ({
-          id: row.id,
-          employeeId: row.staff_id,
-          storeId: row.store_id,
-          date: row.work_date,
-          inTime: row.clock_in
-            ? new Date(row.clock_in).toLocaleTimeString("en-ZA", {
-                timeZone: TIMEZONE,
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: false,
-              })
-            : undefined,
-          outTime: row.clock_out
-            ? new Date(row.clock_out).toLocaleTimeString("en-ZA", {
-                timeZone: TIMEZONE,
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: false,
-              })
-            : undefined,
-          status: row.status,
-          hours:
-            row.clock_in && row.clock_out
-              ? Math.round(
-                  ((new Date(row.clock_out).getTime() -
-                    new Date(row.clock_in).getTime()) /
-                    3600000) *
-                    10,
-                ) / 10
-              : undefined,
-        }),
-      );
+      const cloudRecords: RecordItem[] = (attendanceResult.data ?? []).map(attendanceRecord);
       const openShifts = new Map(
         cloudRecords
           .filter((record) => !record.outTime)
@@ -695,6 +709,28 @@ export default function Home() {
   }, [router, supabase]);
 
   useEffect(() => {
+    if (!supabase || syncMode !== "cloud" || !organizationId) return;
+    let cancelled = false;
+    async function loadAttendanceDate() {
+      const { data, error } = await supabase!
+        .from("attendance")
+        .select("id, staff_id, store_id, work_date, clock_in, clock_out, status, record_source, adjustment_reason")
+        .eq("organization_id", organizationId)
+        .eq("work_date", recordDate)
+        .order("clock_in", { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        setToast(`Attendance could not be loaded: ${error.message}`);
+        return;
+      }
+      const selectedDateRecords = (data ?? []).map(attendanceRecord);
+      setRecords((current) => [...current.filter((record) => record.date !== recordDate), ...selectedDateRecords]);
+    }
+    void loadAttendanceDate();
+    return () => { cancelled = true; };
+  }, [organizationId, recordDate, supabase, syncMode]);
+
+  useEffect(() => {
     if (hydrated && syncMode === "demo")
       window.localStorage.setItem(
         "presently-phase-one",
@@ -745,6 +781,33 @@ export default function Home() {
     if (next === "reports" && currentRole === "admin")
       void loadReportSettings();
   }
+
+  async function saveAttendanceAdjustment(input: AttendanceAdjustmentInput) {
+    if (currentRole !== "admin") throw new Error("Administrator access is required to edit attendance.");
+    if (!supabase) throw new Error("Cloud access is unavailable.");
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("Your session has expired. Please sign in again.");
+    const clockIn = new Date(`${input.clockIn}:00+02:00`).toISOString();
+    const clockOut = new Date(`${input.clockOut}:00+02:00`).toISOString();
+    const response = await fetch("/api/attendance-adjustments", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ attendanceId: input.attendanceId, clockIn, clockOut, reason: input.reason }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? "Attendance correction could not be saved.");
+    setRecords((current) => current.map((record) => record.id === input.attendanceId ? {
+      ...record,
+      inTime: input.clockIn.slice(11, 16),
+      outTime: input.clockOut.slice(11, 16),
+      status: "Complete",
+      recordSource: "administrator_adjustment",
+      adjustmentReason: input.reason.trim(),
+    } : record));
+    setToast("Attendance corrected. Payroll and overtime reports will use the updated times.");
+  }
+
   async function addStaff(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -1730,6 +1793,8 @@ export default function Home() {
             setRecordDate={setRecordDate}
             hoursByRecord={hoursByRecord}
             holidays={holidays}
+            canEdit={currentRole === "admin" && syncMode === "cloud"}
+            onAdjust={saveAttendanceAdjustment}
             onExport={exportCsv}
           />
         )}
@@ -2562,6 +2627,8 @@ function Attendance({
   setRecordDate,
   hoursByRecord,
   holidays,
+  canEdit,
+  onAdjust,
   onExport,
 }: {
   records: RecordItem[];
@@ -2573,9 +2640,36 @@ function Attendance({
   setRecordDate: (date: string) => void;
   hoursByRecord: Map<string, HoursBreakdown>;
   holidays: PublicHoliday[];
+  canEdit: boolean;
+  onAdjust: (input: AttendanceAdjustmentInput) => Promise<void>;
   onExport: () => void;
 }) {
   const holiday = holidays.find((item) => item.date === recordDate);
+  const [editing, setEditing] = useState<RecordItem | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [adjustmentError, setAdjustmentError] = useState("");
+
+  async function submitAdjustment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editing) return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setAdjustmentError("");
+    try {
+      await onAdjust({
+        attendanceId: editing.id,
+        clockIn: String(form.get("clockIn") ?? ""),
+        clockOut: String(form.get("clockOut") ?? ""),
+        reason: String(form.get("reason") ?? ""),
+      });
+      setEditing(null);
+    } catch (error) {
+      setAdjustmentError(error instanceof Error ? error.message : "Attendance correction could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="single-page">
       <section className="section-intro">
@@ -2631,7 +2725,7 @@ function Attendance({
         </div>
       </section>
       <section className="panel table-panel">
-        <div className="attendance-table hours-table">
+        <div className={`attendance-table hours-table ${canEdit ? "can-edit" : ""}`}>
           <div className="table-head">
             <span>Employee</span>
             <span>Store</span>
@@ -2640,6 +2734,7 @@ function Attendance({
             <span>Ordinary</span>
             <span>Overtime</span>
             <span>Public holiday</span>
+            {canEdit && <span>Action</span>}
           </div>
           {records.length ? (
             records.map((record, index) => {
@@ -2678,6 +2773,13 @@ function Attendance({
                   <span data-label="Public holiday">
                     {hours?.publicHoliday.toFixed(1) ?? "—"}
                   </span>
+                  {canEdit && (
+                    <span data-label="Action">
+                      <button className="text-button" onClick={() => { setAdjustmentError(""); setEditing(record); }}>
+                        Edit attendance
+                      </button>
+                    </span>
+                  )}
                 </div>
               );
             })
@@ -2689,6 +2791,34 @@ function Attendance({
           )}
         </div>
       </section>
+      {editing && (
+        <Modal
+          title="Correct attendance"
+          description={`Update ${people.find((person) => person.id === editing.employeeId)?.name ?? "this employee"} for ${editing.date}. The original times remain in the audit history.`}
+          onClose={() => { setEditing(null); setAdjustmentError(""); }}
+        >
+          <form className="modal-form attendance-edit-form" onSubmit={submitAdjustment}>
+            <label>
+              Clock-in date and time
+              <input name="clockIn" type="datetime-local" defaultValue={`${editing.date}T${editing.inTime ?? "07:30"}`} required />
+            </label>
+            <label>
+              Clock-out date and time
+              <input name="clockOut" type="datetime-local" defaultValue={`${editing.date}T${editing.outTime ?? "17:00"}`} required />
+            </label>
+            <label>
+              Reason for correction
+              <textarea name="reason" minLength={3} maxLength={500} placeholder="Example: Employee forgot to clock out; confirmed finish time with store manager." required />
+            </label>
+            <p className="form-note">Saving recalculates ordinary time and overtime from the corrected times. Adjusted shifts cannot exceed 24 hours.</p>
+            {adjustmentError && <p className="auth-message" role="alert">{adjustmentError}</p>}
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => { setEditing(null); setAdjustmentError(""); }}>Cancel</button>
+              <button className="primary-button" disabled={saving}>{saving ? "Saving…" : "Save audited correction"}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }
