@@ -88,9 +88,22 @@ test('counts manual adjustments and keeps their reason and source', () => {
 });
 
 test('counts an administrator-confirmed presence without invented clock times', () => {
-  const result = report([shift('confirmed', '2026-09-07', null, null, 'administrator_adjustment')], '2026-09-07', '2026-09-07');
+  const confirmed = { ...shift('confirmed', '2026-09-07', null, null, 'administrator_adjustment'), adjustmentReason: 'Attendance confirmed by administrator; exact clock times were not supplied.' };
+  const result = report([confirmed], '2026-09-07', '2026-09-07');
   assert.equal(result.daily[0].status, 'Complete');
   assert.equal(result.summary[0].daysLoggedInCount, 1);
+  assert.equal(result.daily[0].totalWorkedMinutes, 0);
+});
+
+test('does not count voided attendance that conflicts with approved leave', () => {
+  const voided = { ...shift('voided', '2026-09-07', null, null, 'administrator_adjustment'), adjustmentReason: 'Voided because the administrator confirmed annual leave.' };
+  const result = calculateAttendanceReport({
+    employees: [employee], records: [voided], schedules, publicHolidayDates: [],
+    leave: [{ id: 'leave', staffId: 'staff', branchId: 'branch', branchName: 'Test Branch', startDate: '2026-09-07', endDate: '2026-09-07', type: 'annual', reason: '', status: 'approved' }],
+    reportStart: '2026-09-07', reportEnd: '2026-09-07', today: '2026-09-08',
+  });
+  assert.equal(result.daily[0].status, 'Annual leave');
+  assert.equal(result.summary[0].daysLoggedInCount, 0);
   assert.equal(result.daily[0].totalWorkedMinutes, 0);
 });
 

@@ -467,7 +467,7 @@ export function calculateAttendanceReport(input: {
     const rows = filteredRows.filter((row) => row.employeeId === employee.id);
     return {
       employeeId: employee.id, employeeName: employee.name, branchId: employee.branchId, branchName: employee.branchName,
-      daysLoggedInCount: rows.filter((row) => row.actualClockInMinute !== null || (row.flags.adjusted && row.attendanceRecords.length > 0 && row.actualClockOutMinute === null)).length,
+      daysLoggedInCount: rows.filter((row) => row.actualClockInMinute !== null || (row.flags.adjusted && row.attendanceRecords.length > 0 && row.actualClockOutMinute === null && row.notes.startsWith('Attendance confirmed by administrator'))).length,
       normalMinutes: rows.reduce((sum, row) => sum + row.normalMinutes, 0),
       overtimeOneHalfMinutes: rows.reduce((sum, row) => sum + row.overtimeOneHalfMinutes, 0),
       overtimeDoubleMinutes: rows.reduce((sum, row) => sum + row.overtimeDoubleMinutes, 0),
