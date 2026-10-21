@@ -17,6 +17,7 @@ import { timeToMinute } from '@/lib/attendance/calculation';
 import type { LeaveType } from '@/lib/leave/types';
 import { buildAbsenceAndLeaveRows } from '@/lib/reports/absence-leave';
 import type { ReportAuthorization } from '@/lib/reports/authorization';
+import { fetchAllPages } from '@/lib/reports/pagination';
 
 const TIMEZONE = 'Africa/Johannesburg';
 
@@ -38,6 +39,17 @@ type ReportRequest = {
   incomplete?: boolean;
   page?: number;
   pageSize?: number;
+};
+
+type AttendanceSourceRow = {
+  id: string;
+  staff_id: string;
+  store_id: string;
+  work_date: string;
+  clock_in: string | null;
+  clock_out: string | null;
+  record_source: string;
+  adjustment_reason: string | null;
 };
 
 function localDate(value: string) {
@@ -65,7 +77,7 @@ export async function buildAttendanceReport(auth: ReportAuthorization, request: 
     admin.from('organizations').select('name').eq('id', auth.organizationId).single(),
     admin.from('stores').select('id, name').eq('organization_id', auth.organizationId).in('id', selectedBranches).order('name'),
     admin.from('staff').select('id, store_id, name, active, created_at, archived_at').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).order('name'),
-    admin.from('attendance').select('id, staff_id, store_id, work_date, clock_in, clock_out, record_source, adjustment_reason').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).gte('work_date', lookback).lte('work_date', period.end).order('work_date').order('clock_in'),
+    fetchAllPages<AttendanceSourceRow>((from, to) => admin.from('attendance').select('id, staff_id, store_id, work_date, clock_in, clock_out, record_source, adjustment_reason').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).gte('work_date', lookback).lte('work_date', period.end).order('work_date').order('clock_in').order('id').range(from, to)),
     admin.from('work_schedule').select('day_of_week, opens_at, closes_at, unpaid_break_minutes').eq('organization_id', auth.organizationId),
     admin.from('public_holidays').select('holiday_date, name').gte('holiday_date', lookback).lte('holiday_date', period.end),
     admin.from('leave_requests').select('id, staff_id, store_id, start_date, end_date, leave_type, reason, status').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).lte('start_date', period.end).gte('end_date', lookback),
