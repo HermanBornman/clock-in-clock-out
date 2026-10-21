@@ -20,7 +20,13 @@ function absence(date: string): DailyAttendanceRow {
 test('groups leave periods and consecutive unapproved absences for the report range', () => {
   const rows = buildAbsenceAndLeaveRows({ dailyRows: [absence('2026-09-06'), absence('2026-09-07')], leave: [leave], employees: [employee], reportStart: '2026-09-03', reportEnd: '2026-09-07' });
   assert.deepEqual(rows.map((row) => ({ days: row.days, reason: row.reason, from: row.fromDate, to: row.toDate, notes: row.notes })), [
-    { days: 3, reason: 'Family responsibility leave', from: '2026-09-03', to: '2026-09-05', notes: 'Family emergency' },
+    { days: 2.5, reason: 'Family responsibility leave', from: '2026-09-03', to: '2026-09-05', notes: 'Family emergency' },
     { days: 2, reason: 'Absent (no approved leave)', from: '2026-09-06', to: '2026-09-07', notes: '' },
   ]);
+});
+
+test('counts weekdays as full leave days, Saturdays as half days, and Sundays as zero', () => {
+  const weeklyLeave: ReportingLeave = { ...leave, startDate: '2026-10-19', endDate: '2026-10-25', type: 'annual' };
+  const rows = buildAbsenceAndLeaveRows({ dailyRows: [], leave: [weeklyLeave], employees: [employee], reportStart: '2026-10-19', reportEnd: '2026-10-25' });
+  assert.equal(rows[0].days, 5.5);
 });

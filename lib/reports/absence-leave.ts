@@ -17,6 +17,16 @@ function calendarDays(fromDate: string, toDate: string) {
   return Math.floor((new Date(`${toDate}T12:00:00Z`).getTime() - new Date(`${fromDate}T12:00:00Z`).getTime()) / 86_400_000) + 1;
 }
 
+function leaveDays(fromDate: string, toDate: string) {
+  let total = 0;
+  for (let date = fromDate; date <= toDate; date = addDays(date, 1)) {
+    const day = new Date(`${date}T12:00:00Z`).getUTCDay();
+    if (day === 0) continue;
+    total += day === 6 ? 0.5 : 1;
+  }
+  return total;
+}
+
 export function buildAbsenceAndLeaveRows(input: {
   dailyRows: DailyAttendanceRow[];
   leave: ReportingLeave[];
@@ -32,7 +42,7 @@ export function buildAbsenceAndLeaveRows(input: {
       const toDate = leave.endDate > input.reportEnd ? input.reportEnd : leave.endDate;
       return {
         id: `leave-${leave.id}`,
-        days: calendarDays(fromDate, toDate),
+        days: leaveDays(fromDate, toDate),
         employeeName: employeeNames.get(leave.staffId)!,
         reason: leaveTypeLabel(leave.type),
         branchName: leave.branchName,
