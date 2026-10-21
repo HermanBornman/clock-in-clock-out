@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { buildActivationOtpParams } from '@/lib/auth/invitation';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
 export default function AcceptInvitePage() {
@@ -37,7 +38,7 @@ export default function AcceptInvitePage() {
     const supabase = createClient();
     if (!supabase) { setMessage('Cloud access is not configured.'); return; }
     setBusy(true); setMessage('');
-    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'magiclink' });
+    const { error } = await supabase.auth.verifyOtp(buildActivationOtpParams(email, token));
     setBusy(false);
     if (error) { setMessage('That activation code is invalid or expired. Ask an administrator to resend the invitation.'); return; }
     setNeedsCode(false); setReady(true); setMessage('Code accepted. Create your password to finish.');
