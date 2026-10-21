@@ -12,10 +12,10 @@ export async function GET(request: Request) {
     const supabase = await createClient();
     const { error } = await supabase?.auth.exchangeCodeForSession(code) ?? { error: new Error('Cloud access is not configured.') };
     if (!error) return NextResponse.redirect(destination);
-    destination.searchParams.set('error', 'This email link is invalid or has expired. Ask an administrator to resend the invitation.');
+    destination.searchParams.set('error', 'This email link is invalid or has expired. Request a new password reset link or ask an administrator to resend the invitation.');
     return NextResponse.redirect(destination);
   }
 
-  destination.searchParams.set('error', 'This email link is incomplete. Ask an administrator to resend the invitation.');
+  destination.searchParams.set('error', 'This email link is incomplete. Request a new password reset link or ask an administrator to resend the invitation.');
   return NextResponse.redirect(destination);
 }
