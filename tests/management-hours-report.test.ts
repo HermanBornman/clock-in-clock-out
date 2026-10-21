@@ -44,11 +44,11 @@ test('deducts a 30-minute Saturday break and ranks the first two Saturdays per m
   assert.equal(totals?.overtimeOneHalfMinutes, 270);
 });
 
-test('classifies Sundays and public holidays at double time', () => {
+test('classifies Sundays at 1.5 times and only public holidays at double time', () => {
   const records = [shift('sun', '2026-09-06', 450, 570), shift('holiday', '2026-09-24', 450, 1020)];
   const totals = calculateConsolidatedMinutes(records, schedules, ['2026-09-24'], '2026-09-01', '2026-09-30').get('staff');
-  assert.equal(totals?.overtimeDoubleMinutes, 630);
-  assert.equal(totals?.overtimeOneHalfMinutes, 0);
+  assert.equal(totals?.overtimeDoubleMinutes, 510);
+  assert.equal(totals?.overtimeOneHalfMinutes, 120);
 });
 
 test('merges duplicate and overlapping completed records', () => {

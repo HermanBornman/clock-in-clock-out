@@ -57,11 +57,12 @@ function leaveLabel(summary: LeaveSummary) {
     .join('; ');
 }
 
-function addPayrollRow(sheet: ExcelJS.Worksheet, branch: string, label: string, values: Pick<SummaryRow, 'daysLoggedInCount' | 'totalOvertimeMinutes'>, leave: LeaveSummary, style?: 'subtotal' | 'total') {
-  const row = sheet.addRow([branch, label, values.daysLoggedInCount, duration(values.totalOvertimeMinutes), leave.days, leaveLabel(leave)]);
+function addPayrollRow(sheet: ExcelJS.Worksheet, branch: string, label: string, values: Pick<SummaryRow, 'daysLoggedInCount' | 'overtimeOneHalfMinutes' | 'overtimeDoubleMinutes'>, leave: LeaveSummary, style?: 'subtotal' | 'total') {
+  const row = sheet.addRow([branch, label, values.daysLoggedInCount, duration(values.overtimeOneHalfMinutes), duration(values.overtimeDoubleMinutes), leave.days, leaveLabel(leave)]);
   row.getCell(3).numFmt = '0';
   row.getCell(4).numFmt = DURATION_FORMAT;
-  row.getCell(5).numFmt = '0.##';
+  row.getCell(5).numFmt = DURATION_FORMAT;
+  row.getCell(6).numFmt = '0.##';
   if (style) {
     row.font = { bold: true, color: style === 'total' ? { argb: 'FFFFFF' } : { argb: NAVY } };
     row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style === 'total' ? NAVY : LIGHT_GREEN } };
@@ -87,7 +88,7 @@ export async function createAttendanceWorkbook(report: AttendanceReport) {
 
   const summary = workbook.addWorksheet('Payroll Summary');
   titleRows(summary, report, branchFilter, workbook.created);
-  summary.addRow(['Branch', 'Employee name', 'Days worked', 'Overtime hours', 'Leave days', 'Leave type(s)']);
+  summary.addRow(['Branch', 'Employee name', 'Days worked', 'Overtime 1.5×', 'Overtime 2× (public holidays)', 'Leave days', 'Leave type(s)']);
   for (const branch of report.branchSubtotals) {
     const employees = report.summary.filter((row) => row.branchId === branch.branchId);
     const branchLeave: LeaveSummary = { days: 0, types: new Map() };
@@ -99,8 +100,8 @@ export async function createAttendanceWorkbook(report: AttendanceReport) {
     addPayrollRow(summary, branch.branchName, `${branch.branchName} subtotal`, branch, branchLeave, 'subtotal');
   }
   addPayrollRow(summary, 'All branches', 'Company-wide total', report.companyTotal, companyLeave, 'total');
-  summary.columns = [{ width: 22 }, { width: 30 }, { width: 14 }, { width: 18 }, { width: 14 }, { width: 46 }];
-  finishSheet(summary, 6, 6);
+  summary.columns = [{ width: 22 }, { width: 30 }, { width: 14 }, { width: 18 }, { width: 28 }, { width: 14 }, { width: 46 }];
+  finishSheet(summary, 6, 7);
 
   const overtime = workbook.addWorksheet('Weekly Overtime');
   titleRows(overtime, report, branchFilter, workbook.created);

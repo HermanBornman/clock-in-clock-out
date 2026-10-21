@@ -88,6 +88,11 @@ test('classifies public-holiday work separately as overtime hours', () => {
   assert.deepEqual(result, { worked: 8.5, ordinary: 0, overtime: 0, publicHoliday: 8.5 });
 });
 
+test('retains Sunday work as overtime even when weekly ordinary hours are incomplete', () => {
+  const result = calculateAttendanceHours([record('sunday', '2026-09-06', '08:00', '10:00')], schedules, []).get('sunday');
+  assert.deepEqual(result, { worked: 2, ordinary: 0, overtime: 2, publicHoliday: 0 });
+});
+
 test('does not double-deduct lunch when the employee clocks out for a full hour', () => {
   const shifts = [record('morning', '2026-09-07', '07:30', '12:00'), record('afternoon', '2026-09-07', '13:00', '17:00')];
   const result = calculateAttendanceHours(shifts, schedules, []);

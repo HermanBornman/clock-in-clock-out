@@ -120,7 +120,7 @@ export function calculateConsolidatedMinutes(
     const payableCore = Math.max(0, intervalMinutes(intervals, open, close) - breakDeduction);
     const overtimeStart = hasSchedule && dayOfWeek >= 1 && dayOfWeek <= 5 ? close + WEEKDAY_OVERTIME_GRACE_MINUTES : close;
     const payableExtra = intervalMinutes(intervals, overtimeStart, 48 * 60);
-    const isDoubleTime = dayOfWeek === 7 || holidays.has(date);
+    const isDoubleTime = holidays.has(date);
     const isOrdinarySaturday = dayOfWeek === 6 && ordinarySaturdays.has(`${staffId}|${date.slice(0, 7)}|${date}`);
     const isRegularDay = (dayOfWeek >= 1 && dayOfWeek <= 5) || isOrdinarySaturday;
 
@@ -152,7 +152,7 @@ export function calculateConsolidatedMinutes(
     required += weekDays.reduce((sum, day) => isoDay(day.date) === 6 ? sum + day.requiredNormalMinutes : sum, 0);
     let deficit = Math.max(0, required - weekDays.reduce((sum, day) => sum + day.normalMinutes, 0));
     for (const day of weekDays.slice().sort((a, b) => a.date.localeCompare(b.date))) {
-      const normalTopUp = Math.min(day.overtimeCandidateMinutes, deficit);
+      const normalTopUp = isoDay(day.date) === 7 ? 0 : Math.min(day.overtimeCandidateMinutes, deficit);
       day.normalMinutes += normalTopUp;
       day.overtimeOneHalfMinutes = applyMinimumOvertime(day.overtimeCandidateMinutes - normalTopUp);
       day.overtimeDoubleMinutes = applyMinimumOvertime(day.overtimeDoubleMinutes);

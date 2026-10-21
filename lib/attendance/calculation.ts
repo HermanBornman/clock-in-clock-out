@@ -179,7 +179,7 @@ export function calculateAttendanceHours(
     let deficit = Math.max(0, required - ordinaryBase);
     const overtimeCandidates = weekDays
       .flatMap((day) => day.records.map((record) => ({ date: day.date, record })))
-      .filter(({ record }) => (record.publicHoliday === 0 && record.extra > 0) || record.overtime > 0)
+      .filter(({ date, record }) => isoDay(date) !== 7 && ((record.publicHoliday === 0 && record.extra > 0) || record.overtime > 0))
       .sort((a, b) => `${a.date}-${a.record.id}`.localeCompare(`${b.date}-${b.record.id}`));
 
     for (const { record } of overtimeCandidates) {

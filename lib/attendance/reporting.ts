@@ -366,7 +366,7 @@ export function calculateAttendanceReport(input: {
       const overtimeStart = hasSchedule && dayOfWeek <= 5 ? close + WEEKDAY_GRACE_MINUTES : close;
       const payableExtra = hasSchedule ? intervalMinutes(validIntervals, overtimeStart, 48 * 60) : 0;
       const holiday = holidays.has(date);
-      const doubleTime = dayOfWeek === 7 || holiday;
+      const doubleTime = holiday;
       const ordinarySaturday = dayOfWeek === 6 && ordinarySaturdays.has(`${employee.id}|${date.slice(0, 7)}|${date}`);
       const regularDay = dayOfWeek <= 5 || ordinarySaturday;
       const scheduled = hasSchedule && !doubleTime && regularDay;
@@ -386,7 +386,7 @@ export function calculateAttendanceReport(input: {
       const overtimeReason = overtimeDoubleMinutes > 0
         ? (holiday ? 'South African public holiday work' : 'Sunday work')
         : overtimeCandidateMinutes > 0
-          ? (dayOfWeek === 6 && !ordinarySaturday ? 'Additional Saturday after the first two worked Saturdays' : dayOfWeek === 6 ? 'Saturday time beyond scheduled hours' : 'Weekday time after the 17:30 overtime threshold')
+          ? (dayOfWeek === 7 ? 'Sunday work' : dayOfWeek === 6 && !ordinarySaturday ? 'Additional Saturday after the first two worked Saturdays' : dayOfWeek === 6 ? 'Saturday time beyond scheduled hours' : 'Weekday time after the 17:30 overtime threshold')
           : null;
       const notes = [...new Set(records.map((record) => record.adjustmentReason).filter((value): value is string => Boolean(value)))].join('; ');
       const row: DayAllocation = {
@@ -450,7 +450,7 @@ export function calculateAttendanceReport(input: {
     required += weekDays.filter((day) => isoDay(day.date) === 6 && day.scheduledDay).reduce((sum, day) => sum + day.scheduledMinutes, 0);
     let deficit = Math.max(0, required - weekDays.reduce((sum, day) => sum + day.normalMinutes, 0));
     for (const day of weekDays.slice().sort((a, b) => a.date.localeCompare(b.date))) {
-      const topUp = Math.min(day.overtimeCandidateMinutes, deficit);
+      const topUp = isoDay(day.date) === 7 ? 0 : Math.min(day.overtimeCandidateMinutes, deficit);
       day.normalMinutes += topUp;
       day.overtimeOneHalfMinutes = applyMinimumOvertime(day.overtimeCandidateMinutes - topUp);
       day.overtimeDoubleMinutes = applyMinimumOvertime(day.overtimeDoubleMinutes);

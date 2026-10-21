@@ -62,7 +62,7 @@ test('merges duplicates and does not confirm overtime from incomplete records', 
   assert.equal(result.daily[0].status, 'Missing clock-out');
 });
 
-test('classifies the third Saturday at 1.5 times and Sunday or holidays at 2 times', () => {
+test('classifies non-holiday overtime at 1.5 times and public holidays at 2 times', () => {
   const records = [
     shift('sat1', '2026-09-05', 480, 780), shift('sat2', '2026-09-12', 480, 780),
     ...['2026-09-14','2026-09-15','2026-09-16','2026-09-17','2026-09-18'].map((date, index) => shift(`weekday-${index}`, date, 450, 1020)),
@@ -70,8 +70,11 @@ test('classifies the third Saturday at 1.5 times and Sunday or holidays at 2 tim
   ];
   const result = report(records, '2026-09-05', '2026-09-24', ['2026-09-24']);
   assert.equal(result.daily.find((row) => row.date === '2026-09-19')?.overtimeOneHalfMinutes, 270);
-  assert.equal(result.daily.find((row) => row.date === '2026-09-20')?.overtimeDoubleMinutes, 120);
+  assert.equal(result.daily.find((row) => row.date === '2026-09-20')?.overtimeOneHalfMinutes, 120);
+  assert.equal(result.daily.find((row) => row.date === '2026-09-20')?.overtimeDoubleMinutes, 0);
   assert.equal(result.daily.find((row) => row.date === '2026-09-24')?.overtimeDoubleMinutes, 510);
+  assert.equal(result.overtime.find((row) => row.date === '2026-09-20')?.rate, '1.5×');
+  assert.equal(result.overtime.find((row) => row.date === '2026-09-24')?.rate, '2×');
 });
 
 test('removes daily overtime below 60 minutes but retains a full hour', () => {
