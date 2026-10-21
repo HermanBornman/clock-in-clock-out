@@ -60,7 +60,7 @@ test('merges duplicate and overlapping completed records', () => {
   assert.equal(totals?.normalMinutes, 510);
 });
 
-test('uses later qualifying time to complete weekly normal hours before overtime', () => {
+test('drops remaining overtime below an hour after completing weekly normal hours', () => {
   const records = [
     shift('mon', '2026-09-07', 510, 1020),
     ...['2026-09-08', '2026-09-09', '2026-09-10'].map((date, index) => shift(`day-${index}`, date, 450, 1020)),
@@ -68,5 +68,5 @@ test('uses later qualifying time to complete weekly normal hours before overtime
   ];
   const totals = calculateConsolidatedMinutes(records, schedules, [], '2026-09-07', '2026-09-11').get('staff');
   assert.equal(totals?.normalMinutes, 2550);
-  assert.equal(totals?.overtimeOneHalfMinutes, 30);
+  assert.equal(totals?.overtimeOneHalfMinutes, 0);
 });

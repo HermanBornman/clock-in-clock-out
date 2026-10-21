@@ -1,4 +1,5 @@
 import type { LeaveType } from '@/lib/leave/types';
+import { applyMinimumOvertime } from './overtime-policy.ts';
 
 export type ReportingSchedule = {
   dayOfWeek: number;
@@ -450,12 +451,13 @@ export function calculateAttendanceReport(input: {
     for (const day of weekDays.slice().sort((a, b) => a.date.localeCompare(b.date))) {
       const topUp = Math.min(day.overtimeCandidateMinutes, deficit);
       day.normalMinutes += topUp;
-      day.overtimeOneHalfMinutes = day.overtimeCandidateMinutes - topUp;
+      day.overtimeOneHalfMinutes = applyMinimumOvertime(day.overtimeCandidateMinutes - topUp);
+      day.overtimeDoubleMinutes = applyMinimumOvertime(day.overtimeDoubleMinutes);
       day.totalOvertimeMinutes = day.overtimeOneHalfMinutes + day.overtimeDoubleMinutes;
       day.totalWorkedMinutes = day.normalMinutes + day.totalOvertimeMinutes;
       day.qualifyingOvertimeMinutes = day.totalOvertimeMinutes;
       day.flags.overtime = day.totalOvertimeMinutes > 0;
-      if (!day.flags.overtime && day.overtimeCandidateMinutes > 0) day.overtimeReason = 'Allocated to outstanding weekly normal hours';
+      if (!day.flags.overtime) day.overtimeReason = null;
       deficit -= topUp;
     }
   }

@@ -1,3 +1,5 @@
+import { applyMinimumOvertime } from './overtime-policy.ts';
+
 export type AttendanceCalculationInput = {
   id: string;
   staffId: string;
@@ -188,6 +190,13 @@ export function calculateAttendanceHours(
       record.overtime = candidate - ordinaryTopUp;
       deficit -= ordinaryTopUp;
     }
+  }
+
+  for (const day of days) {
+    const overtimeTotal = day.records.reduce((sum, record) => sum + record.overtime, 0);
+    const publicHolidayTotal = day.records.reduce((sum, record) => sum + record.publicHoliday, 0);
+    if (applyMinimumOvertime(overtimeTotal) === 0) day.records.forEach((record) => { record.overtime = 0; });
+    if (applyMinimumOvertime(publicHolidayTotal) === 0) day.records.forEach((record) => { record.publicHoliday = 0; });
   }
 
   const result = new Map<string, HoursBreakdown>();

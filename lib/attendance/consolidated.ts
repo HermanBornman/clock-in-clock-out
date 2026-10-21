@@ -1,4 +1,5 @@
 import type { WorkScheduleInput } from './calculation';
+import { applyMinimumOvertime } from './overtime-policy.ts';
 
 export type ConsolidatedAttendanceInput = {
   id: string;
@@ -153,7 +154,8 @@ export function calculateConsolidatedMinutes(
     for (const day of weekDays.slice().sort((a, b) => a.date.localeCompare(b.date))) {
       const normalTopUp = Math.min(day.overtimeCandidateMinutes, deficit);
       day.normalMinutes += normalTopUp;
-      day.overtimeOneHalfMinutes = day.overtimeCandidateMinutes - normalTopUp;
+      day.overtimeOneHalfMinutes = applyMinimumOvertime(day.overtimeCandidateMinutes - normalTopUp);
+      day.overtimeDoubleMinutes = applyMinimumOvertime(day.overtimeDoubleMinutes);
       deficit -= normalTopUp;
     }
   }

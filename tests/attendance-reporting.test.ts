@@ -74,6 +74,17 @@ test('classifies the third Saturday at 1.5 times and Sunday or holidays at 2 tim
   assert.equal(result.daily.find((row) => row.date === '2026-09-24')?.overtimeDoubleMinutes, 510);
 });
 
+test('removes daily overtime below 60 minutes but retains a full hour', () => {
+  const base = ['2026-09-07','2026-09-08','2026-09-09','2026-09-10'].map((date, index) => shift(`day-${index}`, date, 450, 1020));
+  const below = report([...base, shift('fri', '2026-09-11', 450, 1109)], '2026-09-07', '2026-09-11');
+  assert.equal(below.daily.find((row) => row.date === '2026-09-11')?.totalOvertimeMinutes, 0);
+  assert.equal(below.overtime.length, 0);
+
+  const fullHour = report([...base, shift('fri', '2026-09-11', 450, 1110)], '2026-09-07', '2026-09-11');
+  assert.equal(fullHour.daily.find((row) => row.date === '2026-09-11')?.totalOvertimeMinutes, 60);
+  assert.equal(fullHour.overtime[0]?.qualifyingOvertimeMinutes, 60);
+});
+
 test('handles an overnight clock-out without negative or truncated time', () => {
   const records = [shift('overnight', '2026-09-07', 450, 1530), ...['2026-09-08','2026-09-09','2026-09-10','2026-09-11'].map((date, index) => shift(`day-${index}`, date, 450, 1020))];
   const result = report(records, '2026-09-07', '2026-09-11');

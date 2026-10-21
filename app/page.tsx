@@ -2882,7 +2882,7 @@ function LeaveAndHours({
         <article className="rule-card highlight">
           <span>WEEKLY OVERTIME</span>
           <b>After scheduled hours</b>
-          <small>Daily shortfalls are completed before overtime</small>
+          <small>Daily shortfalls are completed first · less than 60 minutes falls away</small>
         </article>
         <article className="rule-card">
           <span>OVERTIME RECORDED</span>
