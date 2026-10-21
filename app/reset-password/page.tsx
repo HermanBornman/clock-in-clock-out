@@ -3,30 +3,59 @@
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { buildRecoveryOtpParams } from '@/lib/auth/password-recovery';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
 export default function ResetPasswordPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
+  const [needsCode, setNeedsCode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(isSupabaseConfigured() ? '' : 'Cloud access is not configured.');
 
   useEffect(() => {
     const linkError = new URLSearchParams(window.location.search).get('error');
     if (linkError) {
-      queueMicrotask(() => setMessage(linkError));
+      queueMicrotask(() => {
+        setNeedsCode(true);
+        setMessage('Enter the email address and six-digit code from your newest password reset email.');
+      });
       return;
     }
     const supabase = createClient();
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) {
-        setMessage('This reset link is invalid or has expired. Request a new link from the sign-in page.');
+        setNeedsCode(true);
+        setMessage('Enter the email address and six-digit code from your newest password reset email.');
         return;
       }
       setReady(true);
     });
   }, []);
+
+  async function verifyCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get('email') ?? '');
+    const token = String(form.get('code') ?? '');
+    const supabase = createClient();
+    if (!supabase) {
+      setMessage('Cloud access is not configured.');
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    const { error } = await supabase.auth.verifyOtp(buildRecoveryOtpParams(email, token));
+    setBusy(false);
+    if (error) {
+      setMessage('That reset code is invalid or expired. Request a new code and use only the newest email.');
+      return;
+    }
+    setNeedsCode(false);
+    setReady(true);
+    setMessage('Code accepted. Choose your new password.');
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -69,15 +98,20 @@ export default function ResetPasswordPage() {
       <section className="auth-form-panel">
         <div className="auth-form-wrap">
           <p className="eyebrow">ADMINISTRATOR ACCESS</p>
-          <h2>Choose a new password</h2>
-          <p>Use at least eight characters and keep it private.</p>
-          <form onSubmit={submit} className="auth-form">
+          <h2>{needsCode ? 'Enter your reset code' : 'Choose a new password'}</h2>
+          <p>{needsCode ? 'Use the newest six-digit code sent to your email address.' : 'Use at least eight characters and keep it private.'}</p>
+          {needsCode ? <form onSubmit={verifyCode} className="auth-form">
+            <label>Email address<input name="email" type="email" autoComplete="email" placeholder="you@company.co.za" required /></label>
+            <label>Reset code<input name="code" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} placeholder="000000" required /></label>
+            {message && <p className="auth-message" role="status">{message}</p>}
+            <button className="primary-button auth-submit" disabled={busy}>{busy ? 'Checking…' : 'Verify reset code →'}</button>
+          </form> : <form onSubmit={submit} className="auth-form">
             <label>New password<input name="password" type="password" autoComplete="new-password" minLength={8} placeholder="At least 8 characters" required disabled={!ready} /></label>
             <label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={8} placeholder="Repeat your password" required disabled={!ready} /></label>
             {message && <p className="auth-message" role="status">{message}</p>}
             <button className="primary-button auth-submit" disabled={!ready || busy}>{busy ? 'Saving…' : 'Save new password →'}</button>
-          </form>
-          {!ready && <Link className="auth-switch" href="/login">Request a new reset link</Link>}
+          </form>}
+          {!ready && <Link className="auth-switch" href="/login">Request a new reset code</Link>}
         </div>
       </section>
     </main>

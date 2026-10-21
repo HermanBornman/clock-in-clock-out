@@ -33,15 +33,18 @@ export default function LoginPage() {
     setMessage('');
 
     if (mode === 'forgot') {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+      const response = await fetch('/api/password-recovery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
       });
+      const result = await response.json().catch(() => ({})) as { message?: string; error?: string };
       setBusy(false);
-      if (error) {
-        setMessage(error.message);
+      if (!response.ok) {
+        setMessage(result.error ?? 'The reset email could not be sent.');
         return;
       }
-      setMessage('If that email belongs to an account, a password reset link has been sent. Please also check the junk folder.');
+      setMessage(result.message ?? 'If that email belongs to an account, a password reset code has been sent.');
       return;
     }
 
@@ -76,7 +79,7 @@ export default function LoginPage() {
     ? 'Sign in to manage your stores and team.'
     : mode === 'signup'
       ? 'Start with your first administrator account.'
-      : 'Enter your administrator email and we will send you a secure reset link.';
+      : 'Enter your administrator email and we will send you a secure six-digit reset code.';
 
   return (
     <main className="auth-page">
@@ -95,7 +98,7 @@ export default function LoginPage() {
             <label>Email address<input name="email" type="email" autoComplete="email" placeholder="admin@yourcompany.co.za" required /></label>
             {mode !== 'forgot' && <label>Password<input name="password" type="password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} minLength={8} placeholder="At least 8 characters" required /></label>}
             {message && <p className="auth-message" role="status">{message}</p>}
-            <button className="primary-button auth-submit" disabled={busy || !isSupabaseConfigured()}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in securely →' : mode === 'signup' ? 'Create administrator account →' : 'Send reset link →'}</button>
+            <button className="primary-button auth-submit" disabled={busy || !isSupabaseConfigured()}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in securely →' : mode === 'signup' ? 'Create administrator account →' : 'Send reset code →'}</button>
           </form>
           {mode === 'signin' && <button className="auth-switch" type="button" onClick={() => changeMode('forgot')}>Forgot your password?</button>}
           <button className="auth-switch secondary" type="button" onClick={() => changeMode(mode === 'signup' ? 'signin' : mode === 'forgot' ? 'signin' : 'signup')}>{mode === 'signup' ? 'Already have an account? Sign in' : mode === 'forgot' ? 'Back to sign in' : 'New to Presently? Create an account'}</button>
