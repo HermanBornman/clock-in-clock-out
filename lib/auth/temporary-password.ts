@@ -10,7 +10,7 @@ function take(characters: string) {
   return characters[randomInt(0, characters.length)];
 }
 
-export function createTemporaryPassword(length = 16) {
+export function createTemporaryPassword(length = 12) {
   if (length < 12) throw new Error('Temporary passwords must contain at least 12 characters.');
   const characters = [take(upper), take(lower), take(digits), take(symbols)];
   while (characters.length < length) characters.push(take(all));

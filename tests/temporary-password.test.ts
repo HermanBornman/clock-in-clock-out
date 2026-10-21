@@ -4,7 +4,7 @@ import { createTemporaryPassword } from '../lib/auth/temporary-password.ts';
 
 test('creates a strong temporary password with every required character group', () => {
   const password = createTemporaryPassword();
-  assert.equal(password.length, 16);
+  assert.equal(password.length, 12);
   assert.match(password, /[A-Z]/);
   assert.match(password, /[a-z]/);
   assert.match(password, /[0-9]/);

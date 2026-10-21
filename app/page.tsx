@@ -1362,7 +1362,7 @@ export default function Home() {
       setToast(payload.message);
       if (action === "reset_password" && payload.temporaryPassword) {
         window.prompt(
-          "Copy this temporary password and give it to the administrator securely. It is shown only once:",
+          "Copy this temporary password and give it to the administrator securely. Use it on the normal sign-in page—not in the six-digit activation-code box. It is shown only once:",
           payload.temporaryPassword,
         );
       }
