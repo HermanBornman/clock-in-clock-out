@@ -93,6 +93,17 @@ test('retains Sunday work as overtime even when weekly ordinary hours are incomp
   assert.deepEqual(result, { worked: 2, ordinary: 0, overtime: 2, publicHoliday: 0 });
 });
 
+test('does not calculate overtime for a staff member whose overtime is disabled', () => {
+  const week = [
+    record('mon', '2026-09-07', '07:30', '17:00'), record('tue', '2026-09-08', '07:30', '17:00'),
+    record('wed', '2026-09-09', '07:30', '17:00'), record('thu', '2026-09-10', '07:30', '17:00'),
+    record('fri', '2026-09-11', '07:30', '19:00'),
+  ];
+  const result = calculateAttendanceHours(week, schedules, [], new Map([['staff-1', false]]));
+  assert.equal(result.get('fri')?.overtime, 0);
+  assert.equal(result.get('fri')?.publicHoliday, 0);
+});
+
 test('does not double-deduct lunch when the employee clocks out for a full hour', () => {
   const shifts = [record('morning', '2026-09-07', '07:30', '12:00'), record('afternoon', '2026-09-07', '13:00', '17:00')];
   const result = calculateAttendanceHours(shifts, schedules, []);

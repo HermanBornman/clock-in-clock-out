@@ -45,6 +45,7 @@ type Person = {
   storeId: string;
   pin: string;
   active: boolean;
+  overtimeEligible?: boolean;
   clockedIn: boolean;
   clockIn?: string;
   email?: string | null;
@@ -411,7 +412,7 @@ const formatDate = (value: Date) =>
     month: "long",
   });
 
-function calculateHours(records: RecordItem[], holidays: PublicHoliday[]) {
+function calculateHours(records: RecordItem[], holidays: PublicHoliday[], people: Person[]) {
   return calculateAttendanceHours(
     records
       .filter((record) => record.inTime)
@@ -424,6 +425,7 @@ function calculateHours(records: RecordItem[], holidays: PublicHoliday[]) {
       })),
     workSchedules,
     holidays.map((holiday) => holiday.date),
+    new Map(people.map((person) => [person.id, person.overtimeEligible !== false])),
   );
 }
 
@@ -594,7 +596,7 @@ export default function Home() {
         supabase
           .from("staff")
           .select(
-            "id, organization_id, store_id, name, role, pin_last_two, active, created_at",
+            "id, organization_id, store_id, name, role, pin_last_two, active, overtime_eligible, created_at",
           )
           .eq("organization_id", orgId)
           .is("archived_at", null)
@@ -649,6 +651,7 @@ export default function Home() {
         storeId: row.store_id,
         pin: `00${row.pin_last_two ?? "00"}`,
         active: row.active,
+        overtimeEligible: row.overtime_eligible !== false,
         clockedIn: openShifts.has(row.id),
         clockIn: openShifts.get(row.id)?.inTime,
       }));
@@ -767,8 +770,8 @@ export default function Home() {
   const administratorName =
     adminEmail === "Administrator" ? "Administrator" : adminEmail.split("@")[0];
   const hoursByRecord = useMemo(
-    () => calculateHours(records, holidays),
-    [records, holidays],
+    () => calculateHours(records, holidays, people),
+    [records, holidays, people],
   );
 
   function switchView(next: View) {
@@ -845,6 +848,7 @@ export default function Home() {
       storeId,
       pin,
       active: true,
+      overtimeEligible: true,
       clockedIn: false,
       email: privateDetails.email,
       contactNumber: privateDetails.contactNumber,
@@ -1010,6 +1014,24 @@ export default function Home() {
         item.id === id ? { ...item, active, clockedIn: false } : item,
       ),
     );
+  }
+  async function setStaffOvertimeEligibility(id: string, enabled: boolean) {
+    const person = people.find((item) => item.id === id);
+    if (!person) return;
+    try {
+      let message = `Overtime was ${enabled ? "enabled" : "disabled"} for ${person.name}.`;
+      if (syncMode === "cloud") {
+        const payload = await staffFetch("", {
+          method: "PATCH",
+          body: JSON.stringify({ action: "set_overtime_eligibility", staffId: id, enabled }),
+        });
+        message = payload.message;
+      }
+      setPeople((current) => current.map((item) => item.id === id ? { ...item, overtimeEligible: enabled } : item));
+      setToast(message);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The overtime setting could not be updated.");
+    }
   }
   async function toggleStore(id: string) {
     const store = stores.find((item) => item.id === id);
@@ -1820,6 +1842,7 @@ export default function Home() {
             onAdd={() => setModal("staff")}
             onEditDetails={openStaffDetails}
             onToggle={toggleStaff}
+            onOvertimeEligibility={setStaffOvertimeEligibility}
             onResetPin={openResetPin}
             onChangeStore={openChangeStore}
             onRemove={removeStaff}
@@ -3460,6 +3483,7 @@ function Staff({
   onAdd,
   onEditDetails,
   onToggle,
+  onOvertimeEligibility,
   onResetPin,
   onChangeStore,
   onRemove,
@@ -3472,6 +3496,7 @@ function Staff({
   onAdd: () => void;
   onEditDetails: (id: string) => void;
   onToggle: (id: string) => void;
+  onOvertimeEligibility: (id: string, enabled: boolean) => void;
   onResetPin: (id: string) => void;
   onChangeStore: (id: string) => void;
   onRemove: (id: string) => void;
@@ -3573,6 +3598,12 @@ function Staff({
                     <b>{person.startDate ?? "Not recorded"}</b>
                   </span>
                 </div>
+              )}
+              {canManage && (
+                <label className="overtime-eligibility-toggle">
+                  <input type="checkbox" checked={person.overtimeEligible !== false} onChange={(event) => onOvertimeEligibility(person.id, event.target.checked)} />
+                  <span><b>Overtime enabled</b><small>Untick when overtime does not apply to this staff member.</small></span>
+                </label>
               )}
               {canManage && (
                 <div className="staff-card-actions">

@@ -78,6 +78,7 @@ export function calculateConsolidatedMinutes(
   publicHolidayDates: Iterable<string>,
   reportStart: string,
   reportEnd: string,
+  overtimeEligibility?: ReadonlyMap<string, boolean>,
 ) {
   const holidays = new Set(publicHolidayDates);
   const completed = input.filter((record) => record.clockOutMinute !== null && record.clockOutMinute > record.clockInMinute);
@@ -121,6 +122,7 @@ export function calculateConsolidatedMinutes(
     const overtimeStart = hasSchedule && dayOfWeek >= 1 && dayOfWeek <= 5 ? close + WEEKDAY_OVERTIME_GRACE_MINUTES : close;
     const payableExtra = intervalMinutes(intervals, overtimeStart, 48 * 60);
     const isDoubleTime = holidays.has(date);
+    const overtimeEligible = overtimeEligibility?.get(staffId) !== false;
     const isOrdinarySaturday = dayOfWeek === 6 && ordinarySaturdays.has(`${staffId}|${date.slice(0, 7)}|${date}`);
     const isRegularDay = (dayOfWeek >= 1 && dayOfWeek <= 5) || isOrdinarySaturday;
 
@@ -130,9 +132,9 @@ export function calculateConsolidatedMinutes(
       weekKey: `${staffId}|${weekStart(date)}`,
       requiredNormalMinutes: !isDoubleTime && isRegularDay && hasSchedule ? Math.max(0, close - open - (schedule?.unpaidBreakMinutes ?? 0)) : 0,
       normalMinutes: !isDoubleTime && isRegularDay ? payableCore : 0,
-      overtimeCandidateMinutes: !isDoubleTime ? (isRegularDay ? payableExtra : payableCore + payableExtra) : 0,
+      overtimeCandidateMinutes: overtimeEligible && !isDoubleTime ? (isRegularDay ? payableExtra : payableCore + payableExtra) : 0,
       overtimeOneHalfMinutes: 0,
-      overtimeDoubleMinutes: isDoubleTime ? payableCore + payableExtra : 0,
+      overtimeDoubleMinutes: overtimeEligible && isDoubleTime ? payableCore + payableExtra : 0,
     });
   }
 

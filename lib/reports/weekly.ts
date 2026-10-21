@@ -4,7 +4,7 @@ import { calculateAttendanceHours, timeToMinute, type WorkScheduleInput } from '
 import { leaveTypeLabel, type LeaveType } from '@/lib/leave/types';
 
 type Store = { id: string; name: string; location: string; code: string };
-type Staff = { id: string; store_id: string; name: string; role: string; active: boolean };
+type Staff = { id: string; store_id: string; name: string; role: string; active: boolean; overtime_eligible: boolean };
 type Attendance = { id: string; staff_id: string; store_id: string; work_date: string; clock_in: string; clock_out: string | null };
 type Leave = { staff_id: string; store_id: string; leave_type: LeaveType; start_date: string; end_date: string; status: string };
 type Schedule = { day_of_week: number; opens_at: string | null; closes_at: string | null; unpaid_break_minutes: number };
@@ -43,7 +43,7 @@ export async function buildWeeklyReport(organizationId: string, weekStart: strin
   const [orgResult, storesResult, staffResult, attendanceResult, leaveResult, scheduleResult, holidaysResult] = await Promise.all([
     admin.from('organizations').select('name').eq('id', organizationId).single(),
     admin.from('stores').select('id, name, location, code').eq('organization_id', organizationId).order('name'),
-    admin.from('staff').select('id, store_id, name, role, active').eq('organization_id', organizationId).order('name'),
+    admin.from('staff').select('id, store_id, name, role, active, overtime_eligible').eq('organization_id', organizationId).order('name'),
     admin.from('attendance').select('id, staff_id, store_id, work_date, clock_in, clock_out').eq('organization_id', organizationId).gte('work_date', classificationStart).lte('work_date', weekEnd).order('work_date').order('clock_in'),
     admin.from('leave_requests').select('staff_id, store_id, leave_type, start_date, end_date, status').eq('organization_id', organizationId).lte('start_date', weekEnd).gte('end_date', weekStart),
     admin.from('work_schedule').select('day_of_week, opens_at, closes_at, unpaid_break_minutes').eq('organization_id', organizationId),
@@ -62,7 +62,7 @@ export async function buildWeeklyReport(organizationId: string, weekStart: strin
   const holidays = (holidaysResult.data ?? []) as Holiday[];
   const holidayDates = new Set(holidays.map((holiday) => holiday.holiday_date));
   const calculationSchedules: WorkScheduleInput[] = schedules.map((schedule) => ({ dayOfWeek: schedule.day_of_week, opensAtMinute: timeToMinute(schedule.opens_at), closesAtMinute: timeToMinute(schedule.closes_at), unpaidBreakMinutes: schedule.unpaid_break_minutes }));
-  const hoursByRecord = calculateAttendanceHours(attendance.map((record) => ({ id: record.id, staffId: record.staff_id, date: record.work_date, clockInMinute: localMinute(record.clock_in, record.work_date), clockOutMinute: record.clock_out ? localMinute(record.clock_out, record.work_date) : null })), calculationSchedules, holidayDates);
+  const hoursByRecord = calculateAttendanceHours(attendance.map((record) => ({ id: record.id, staffId: record.staff_id, date: record.work_date, clockInMinute: localMinute(record.clock_in, record.work_date), clockOutMinute: record.clock_out ? localMinute(record.clock_out, record.work_date) : null })), calculationSchedules, holidayDates, new Map(staff.map((person) => [person.id, person.overtime_eligible !== false])));
   const details: Detail[] = [];
 
   for (const record of attendance.filter((item) => item.work_date >= weekStart)) {

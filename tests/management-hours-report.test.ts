@@ -79,3 +79,14 @@ test('rounds qualifying consolidated overtime down to 30-minute blocks', () => {
   const totals = calculateConsolidatedMinutes(records, schedules, [], '2026-09-07', '2026-09-11').get('staff');
   assert.equal(totals?.overtimeOneHalfMinutes, 60);
 });
+
+test('excludes overtime when it is disabled for a staff member', () => {
+  const records = [
+    shift('mon', '2026-09-07', 450, 1020), shift('tue', '2026-09-08', 450, 1020),
+    shift('wed', '2026-09-09', 450, 1020), shift('thu', '2026-09-10', 450, 1020),
+    shift('fri', '2026-09-11', 450, 1140),
+  ];
+  const totals = calculateConsolidatedMinutes(records, schedules, [], '2026-09-07', '2026-09-11', new Map([['staff', false]])).get('staff');
+  assert.equal(totals?.overtimeOneHalfMinutes, 0);
+  assert.equal(totals?.overtimeDoubleMinutes, 0);
+});

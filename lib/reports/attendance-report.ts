@@ -76,7 +76,7 @@ export async function buildAttendanceReport(auth: ReportAuthorization, request: 
   const [organizationResult, storesResult, staffResult, attendanceResult, scheduleResult, holidayResult, leaveResult] = await Promise.all([
     admin.from('organizations').select('name').eq('id', auth.organizationId).single(),
     admin.from('stores').select('id, name').eq('organization_id', auth.organizationId).in('id', selectedBranches).order('name'),
-    admin.from('staff').select('id, store_id, name, active, created_at, archived_at').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).order('name'),
+    admin.from('staff').select('id, store_id, name, active, overtime_eligible, created_at, archived_at').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).order('name'),
     fetchAllPages<AttendanceSourceRow>((from, to) => admin.from('attendance').select('id, staff_id, store_id, work_date, clock_in, clock_out, record_source, adjustment_reason').eq('organization_id', auth.organizationId).in('store_id', selectedBranches).gte('work_date', lookback).lte('work_date', period.end).order('work_date').order('clock_in').order('id').range(from, to)),
     admin.from('work_schedule').select('day_of_week, opens_at, closes_at, unpaid_break_minutes').eq('organization_id', auth.organizationId),
     admin.from('public_holidays').select('holiday_date, name').gte('holiday_date', lookback).lte('holiday_date', period.end),
@@ -88,7 +88,7 @@ export async function buildAttendanceReport(auth: ReportAuthorization, request: 
   const rawAttendance = attendanceResult.data ?? [];
   const rawLeave = leaveResult.data ?? [];
   const employees: ReportingEmployee[] = (staffResult.data ?? []).filter((row) => row.active || rawAttendance.some((record) => record.staff_id === row.id && record.work_date >= period.start) || rawLeave.some((leave) => leave.staff_id === row.id && leave.status === 'approved')).map((row) => ({
-    id: String(row.id), name: String(row.name), branchId: String(row.store_id), branchName: stores.get(String(row.store_id)) ?? 'Unknown branch', active: Boolean(row.active), employmentStartDate: localDate(String(row.created_at)), employmentEndDate: row.archived_at ? localDate(String(row.archived_at)) : null,
+    id: String(row.id), name: String(row.name), branchId: String(row.store_id), branchName: stores.get(String(row.store_id)) ?? 'Unknown branch', active: Boolean(row.active), overtimeEligible: row.overtime_eligible !== false, employmentStartDate: localDate(String(row.created_at)), employmentEndDate: row.archived_at ? localDate(String(row.archived_at)) : null,
   }));
   const employeeIds = new Set(employees.map((employee) => employee.id));
   if (request.employeeId && !employeeIds.has(request.employeeId)) throw new Error('The selected employee is not available within your authorised branches.');

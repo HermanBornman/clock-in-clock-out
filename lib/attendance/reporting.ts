@@ -15,6 +15,7 @@ export type ReportingEmployee = {
   branchName: string;
   department?: string | null;
   active: boolean;
+  overtimeEligible?: boolean;
   employmentStartDate?: string;
   employmentEndDate?: string | null;
 };
@@ -380,8 +381,8 @@ export function calculateAttendanceReport(input: {
       const hasAnyRecord = records.length > 0;
       const absent = scheduled && !hasAnyRecord && !leave;
       const normalMinutes = !doubleTime && regularDay ? payableCore : 0;
-      const overtimeCandidateMinutes = !doubleTime ? (regularDay ? payableExtra : payableCore + payableExtra) : 0;
-      const overtimeDoubleMinutes = doubleTime ? payableCore + payableExtra : 0;
+      const overtimeCandidateMinutes = employee.overtimeEligible !== false && !doubleTime ? (regularDay ? payableExtra : payableCore + payableExtra) : 0;
+      const overtimeDoubleMinutes = employee.overtimeEligible !== false && doubleTime ? payableCore + payableExtra : 0;
       const flags = { late: lateMinutes > 0, early: earlyDepartureMinutes > 0, missingClockIn, missingClockOut, absent, incomplete: missingClockIn || missingClockOut || invalid, adjusted, overtime: overtimeCandidateMinutes + overtimeDoubleMinutes > 0 };
       const overtimeReason = overtimeDoubleMinutes > 0
         ? (holiday ? 'South African public holiday work' : 'Sunday work')

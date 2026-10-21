@@ -27,6 +27,7 @@ const detailFields = {
 const updateSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('reset_pin'), staffId: z.string().uuid(), pin: z.string().regex(/^\d{4}$/) }),
   z.object({ action: z.literal('change_store'), staffId: z.string().uuid(), storeId: z.string().uuid() }),
+  z.object({ action: z.literal('set_overtime_eligibility'), staffId: z.string().uuid(), enabled: z.boolean() }),
   z.object({ action: z.literal('update_details'), staffId: z.string().uuid(), ...detailFields }),
 ]);
 
@@ -180,6 +181,12 @@ export async function PATCH(request: Request) {
         startDate: data.start_date, dateOfBirth: data.date_of_birth, updatedAt: data.updated_at,
       },
     });
+  }
+
+  if (parsed.data.action === 'set_overtime_eligibility') {
+    const { error } = await admin.from('staff').update({ overtime_eligible: parsed.data.enabled }).eq('id', staffId).eq('organization_id', organizationId);
+    if (error) return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ message: `Overtime was ${parsed.data.enabled ? 'enabled' : 'disabled'} for ${staff.name}.`, overtimeEligible: parsed.data.enabled });
   }
 
   const { storeId } = parsed.data;

@@ -77,6 +77,17 @@ test('classifies non-holiday overtime at 1.5 times and public holidays at 2 time
   assert.equal(result.overtime.find((row) => row.date === '2026-09-24')?.rate, '2×');
 });
 
+test('excludes overtime from reports when it is disabled for the employee', () => {
+  const ineligible = { ...employee, overtimeEligible: false };
+  const records = [
+    ...['2026-09-07','2026-09-08','2026-09-09','2026-09-10'].map((date, index) => shift(`day-${index}`, date, 450, 1020)),
+    shift('friday', '2026-09-11', 450, 1140),
+  ];
+  const result = calculateAttendanceReport({ employees: [ineligible], records, schedules, publicHolidayDates: [], leave: [], reportStart: '2026-09-07', reportEnd: '2026-09-11', today: '2026-09-12' });
+  assert.equal(result.summary[0].totalOvertimeMinutes, 0);
+  assert.equal(result.overtime.length, 0);
+});
+
 test('removes daily overtime below 60 minutes but retains a full hour', () => {
   const base = ['2026-09-07','2026-09-08','2026-09-09','2026-09-10'].map((date, index) => shift(`day-${index}`, date, 450, 1020));
   const below = report([...base, shift('fri', '2026-09-11', 450, 1109)], '2026-09-07', '2026-09-11');

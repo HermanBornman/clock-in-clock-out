@@ -94,6 +94,7 @@ export function calculateAttendanceHours(
   input: AttendanceCalculationInput[],
   schedules: WorkScheduleInput[],
   publicHolidayDates: Iterable<string>,
+  overtimeEligibility?: ReadonlyMap<string, boolean>,
 ) {
   const holidays = new Set(publicHolidayDates);
   const completed = input.filter((record) => record.clockOutMinute !== null && record.clockOutMinute > record.clockInMinute);
@@ -193,10 +194,11 @@ export function calculateAttendanceHours(
   }
 
   for (const day of days) {
+    const overtimeEligible = overtimeEligibility?.get(day.staffId) !== false;
     const overtimeTotal = day.records.reduce((sum, record) => sum + record.overtime, 0);
     const publicHolidayTotal = day.records.reduce((sum, record) => sum + record.publicHoliday, 0);
-    let payableOvertime = applyMinimumOvertime(overtimeTotal);
-    let payablePublicHoliday = applyMinimumOvertime(publicHolidayTotal);
+    let payableOvertime = overtimeEligible ? applyMinimumOvertime(overtimeTotal) : 0;
+    let payablePublicHoliday = overtimeEligible ? applyMinimumOvertime(publicHolidayTotal) : 0;
     for (const record of day.records) {
       record.overtime = Math.min(record.overtime, payableOvertime);
       payableOvertime -= record.overtime;
