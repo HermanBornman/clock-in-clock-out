@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
@@ -40,15 +40,42 @@ export default function StaffClockPage() {
   );
   const store = directory[0];
 
+  const loadDirectory = useCallback(async (code: string) => {
+    if (!supabase) return null;
+    const { data, error } = await supabase.rpc('clock_station_staff', { p_store_code: code });
+    if (error) return null;
+    return (data ?? []) as DirectoryRow[];
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!directory.length || !storeCode) return;
+
+    const refresh = async () => {
+      const rows = await loadDirectory(storeCode);
+      if (rows?.length) setDirectory(rows);
+    };
+    const interval = window.setInterval(refresh, 10_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [directory.length, loadDirectory, storeCode]);
+
   async function findStore(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase) { setMessage('The staff clock is not configured.'); return; }
     setBusy(true); setMessage(''); setResult(null);
     const code = storeCode.trim().toUpperCase();
-    const { data, error } = await supabase.rpc('clock_station_staff', { p_store_code: code });
+    const rows = await loadDirectory(code);
     setBusy(false);
-    if (error) { setMessage('The staff clock is temporarily unavailable.'); return; }
-    const rows = (data ?? []) as DirectoryRow[];
+    if (rows === null) { setMessage('The staff clock is temporarily unavailable.'); return; }
     if (!rows.length) { setMessage('Store code not found. Check the code with your manager.'); return; }
     setStoreCode(code); setDirectory(rows); setSelectedStaffId(''); setPin('');
   }
@@ -57,11 +84,34 @@ export default function StaffClockPage() {
     event.preventDefault();
     if (!supabase || !selectedStaff || pin.length !== 4) return;
     setBusy(true); setMessage('');
-    const action = selectedStaff.clocked_in ? 'out' : 'in';
-    const { data, error } = await supabase.rpc('staff_clock', {
+    const latestDirectory = await loadDirectory(storeCode);
+    if (latestDirectory === null) {
+      setBusy(false);
+      setMessage('Attendance could not be recorded. Please try again.');
+      return;
+    }
+    const latestStaff = latestDirectory.find((person) => person.staff_id === selectedStaff.staff_id);
+    if (!latestStaff) {
+      setBusy(false); setPin(''); setDirectory(latestDirectory); setSelectedStaffId('');
+      setMessage('This staff profile is no longer available at this store.');
+      return;
+    }
+    if (latestStaff.clocked_in !== selectedStaff.clocked_in) {
+      setBusy(false); setPin(''); setDirectory(latestDirectory);
+      setMessage('Attendance changed on another clock station. Check the updated action and enter your PIN again.');
+      return;
+    }
+    const sessionKey = 'presently-clock-station-session';
+    let stationSessionId = window.sessionStorage.getItem(sessionKey);
+    if (!stationSessionId) {
+      stationSessionId = window.crypto.randomUUID();
+      window.sessionStorage.setItem(sessionKey, stationSessionId);
+    }
+    const { data, error } = await supabase.rpc('staff_clock_v2', {
       p_staff_id: selectedStaff.staff_id,
       p_pin: pin,
-      p_action: action,
+      p_station_session_id: stationSessionId,
+      p_request_id: window.crypto.randomUUID(),
     });
     setBusy(false); setPin('');
     if (error) { setMessage('Attendance could not be recorded. Please try again.'); return; }
@@ -69,7 +119,7 @@ export default function StaffClockPage() {
     if (!response?.success) { setMessage(response?.message ?? 'Attendance could not be recorded.'); return; }
     setResult(response);
     setDirectory((current) => current.map((person) => person.staff_id === selectedStaff.staff_id
-      ? { ...person, clocked_in: action === 'in' }
+      ? { ...person, clocked_in: response.action === 'in' }
       : person));
   }
 
